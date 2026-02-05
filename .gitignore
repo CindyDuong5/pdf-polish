@@ -1,0 +1,29 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+output/
+*.sqlite
+*.db
+
+# Gmail creds/tokens
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Secrets
+.env
+token.json
+credentials.json
+
+# Build
+dist/
+build/
+*.log
+
+# OS
+.DS_Store
