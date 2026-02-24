@@ -19,6 +19,7 @@ __pycache__/
 .env
 token.json
 credentials.json
+pdf_polish_secrets.json
 
 # Build
 dist/
@@ -27,3 +28,14 @@ build/
 
 # OS
 .DS_Store
+
+# Local secrets
+.env
+token.json
+credentials.json
+pdf-polish-worker-sa.json
+
+# Local generated files
+sample_inputs/*.pdf
+out/*.pdf
+*.log

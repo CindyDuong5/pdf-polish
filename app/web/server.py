@@ -11,6 +11,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from google.cloud import pubsub_v1
 
 from app.db import SessionLocal
 from app.models import GmailJob, GmailState
@@ -127,6 +128,8 @@ def renew_watch():
     Stores initial last_history_id if empty.
     """
     topic_name = _env_required("GMAIL_PUBSUB_TOPIC")
+    if not _topic_exists(topic_name):
+        raise HTTPException(status_code=500, detail=f"GMAIL_PUBSUB_TOPIC does not exist: {topic_name}")
 
     watch_body = {
         "topicName": topic_name,
@@ -287,3 +290,18 @@ async def gmail_webhook_legacy(request: Request):
     Keep forever so endpoint mismatches never break ingestion.
     """
     return await _handle_pubsub_push(request)
+
+def _topic_exists(topic_name: str) -> bool:
+    client = pubsub_v1.PublisherClient()
+    try:
+        client.get_topic(request={"topic": topic_name})
+        return True
+    except Exception:
+        return False
+    
+@app.get("/debug/config")
+def debug_config():
+    return {
+        "topic": os.getenv("GMAIL_PUBSUB_TOPIC"),
+        "service": "gmail-pdf-webhook",
+    }

@@ -1,16 +1,14 @@
-
-# scripts/gmail_watch.py
 # scripts/gmail_watch.py
 import json
 from pathlib import Path
+import os
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # adjust if token.json is elsewhere
 TOKEN_PATH = Path(__file__).resolve().parents[1] / "token.json"
-
-TOPIC_NAME = "projects/pdf-polish-gmail-intake-484818/topics/gmail-intake"
+TOPIC_NAME = os.environ["GMAIL_PUBSUB_TOPIC"]
 
 def main():
     creds = Credentials.from_authorized_user_file(str(TOKEN_PATH))

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
 from app.models import InboundEmail, Document
@@ -21,6 +21,17 @@ def iso_date_utc(dt: datetime | None) -> str:
     if not dt:
         dt = datetime.now(timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+def make_styled_draft_key(original_key: str, doc_id: uuid.UUID) -> str:
+    """
+    Keep date partition consistent with original:
+      original/YYYY-MM-DD/<doc_id>.pdf
+      styled_draft/YYYY-MM-DD/<doc_id>.pdf
+    """
+    parts = original_key.split("/", 2)
+    day = parts[1] if len(parts) >= 2 else iso_date_utc(None)
+    return f"styled_draft/{day}/{doc_id}.pdf"
 
 
 @dataclass
@@ -74,6 +85,24 @@ def mark_error(db, job_id: int, err: str) -> None:
     db.commit()
 
 
+def document_exists_for_inbound(db, inbound_id, filename: str) -> bool:
+    """
+    Prevent duplicate Document rows if the same gmail job replays.
+    Uses extracted_fields->>'source_filename' as a simple idempotency key.
+    """
+    sql = text(
+        """
+        SELECT 1
+        FROM public.documents
+        WHERE inbound_email_id = :inbound_id
+          AND extracted_fields->>'source_filename' = :filename
+        LIMIT 1
+        """
+    )
+    row = db.execute(sql, {"inbound_id": inbound_id, "filename": filename}).first()
+    return row is not None
+
+
 def main(max_jobs: int = 10) -> int:
     gmail = GmailClient()
     s3 = S3Client()
@@ -94,7 +123,8 @@ def main(max_jobs: int = 10) -> int:
                 # 1) Fetch message meta + attachments by gmail_message_id
                 meta = gmail.fetch_message_meta(job.gmail_message_id)
                 pdfs = gmail.download_pdf_attachments(job.gmail_message_id)
-
+                print(f"Found {len(pdfs)} PDF attachments")
+                
                 # 2) Idempotent inbound insert (UNIQUE gmail_message_id)
                 inbound = InboundEmail(
                     gmail_message_id=meta.message_id,
@@ -105,8 +135,28 @@ def main(max_jobs: int = 10) -> int:
                     raw_meta={"thread_id": meta.thread_id},
                 )
                 db.add(inbound)
-                db.commit()
-                db.refresh(inbound)
+
+                try:
+                    db.commit()
+                    db.refresh(inbound)
+                    created = True
+                except IntegrityError:
+                    db.rollback()
+                    created = False
+                    inbound = (
+                        db.query(InboundEmail)
+                        .filter(InboundEmail.gmail_message_id == meta.message_id)
+                        .first()
+                    )
+                    if not inbound:
+                        raise RuntimeError(
+                            f"Duplicate gmail_message_id but inbound row not found: {meta.message_id}"
+                        )
+
+                if created:
+                    print(f"Inbound created: id={inbound.id} gmail_message_id={meta.message_id}")
+                else:
+                    print(f"Inbound reused:  id={inbound.id} gmail_message_id={meta.message_id}")
 
                 # 3) Handle no PDFs
                 if not pdfs:
@@ -118,12 +168,20 @@ def main(max_jobs: int = 10) -> int:
                     processed += 1
                     continue
 
-                # 4) Upload PDFs + create Document rows
+                # 4) Upload PDFs + create Document rows (idempotent per inbound+filename)
                 for filename, pdf_bytes in pdfs:
+                    if document_exists_for_inbound(db, inbound.id, filename):
+                        print(f"SKIP doc (already exists for inbound {inbound.id}): {filename}")
+                        continue
+
                     doc_id = uuid.uuid4()
                     day = iso_date_utc(meta.internal_date)
-                    s3_key = f"original/{day}/{doc_id}.pdf"
-                    s3.upload_pdf_bytes(s3_key, pdf_bytes)
+
+                    original_key = f"original/{day}/{doc_id}.pdf"
+                    s3.upload_pdf_bytes(original_key, pdf_bytes)
+
+                    styled_key = make_styled_draft_key(original_key, doc_id)
+                    s3.copy_pdf(original_key, styled_key)
 
                     doc = Document(
                         id=doc_id,
@@ -135,10 +193,10 @@ def main(max_jobs: int = 10) -> int:
                         invoice_number=None,
                         quote_number=None,
                         job_report_number=None,
-                        original_s3_key=s3_key,
-                        styled_draft_s3_key=None,
+                        original_s3_key=original_key,
+                        styled_draft_s3_key=styled_key,
                         final_s3_key=None,
-                        status="NEW",
+                        status="READY_FOR_REVIEW",
                         extracted_fields={
                             "source_filename": filename,
                             "gmail_message_id": meta.message_id,
@@ -146,7 +204,9 @@ def main(max_jobs: int = 10) -> int:
                     )
                     db.add(doc)
                     db.commit()
-                    print(f"Uploaded {filename} -> s3://{s3.bucket}/{s3_key}")
+
+                    print(f"Uploaded {filename} -> s3://{s3.bucket}/{original_key}")
+                    print(f"Draft ready -> s3://{s3.bucket}/{styled_key}")
 
                 inbound.status = "PARSED"
                 db.commit()
@@ -165,6 +225,19 @@ def main(max_jobs: int = 10) -> int:
 
     finally:
         db.close()
+
+
+def guess_kind(subject: str | None, filename: str | None) -> str:
+    s = (subject or "").lower()
+    f = (filename or "").lower()
+
+    if "invoice" in s or "invoice" in f:
+        return "invoice"
+    if "quote" in s or "quote" in f:
+        return "quote"
+    if "report" in s or "job report" in s or "report" in f:
+        return "job"
+    return "invoice"  # default
 
 
 if __name__ == "__main__":
