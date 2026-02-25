@@ -6,21 +6,21 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from fastapi import FastAPI, HTTPException, Request, Response
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from fastapi import FastAPI, HTTPException, Request
+from google.cloud import pubsub_v1
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from google.cloud import pubsub_v1
 
 from app.db import SessionLocal
+from app.gmail_client import GmailClient  # ✅ unified auth path
 from app.models import GmailJob, GmailState
-
-# For push + history reading, readonly is usually OK.
-# If you hit permission issues on watch/history, switch to gmail.metadata or gmail.modify.
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+import logging
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PDF Polish Gmail Push Webhook", version="0.1.0")
+
+# Cache GmailClient/service across requests within a single Cloud Run instance
+_GMAIL_CLIENT: GmailClient | None = None
 
 
 def _env_required(name: str) -> str:
@@ -31,24 +31,11 @@ def _env_required(name: str) -> str:
 
 
 def _get_gmail_service():
-    """
-    Build Gmail service using token JSON stored in Secret Manager and injected
-    into env var GMAIL_TOKEN_JSON on Cloud Run.
-    """
-    token_json = os.getenv("GMAIL_TOKEN_JSON")
-    if not token_json:
-        raise RuntimeError("Missing GMAIL_TOKEN_JSON env var (Secret Manager).")
-
-    try:
-        info = json.loads(token_json)
-    except Exception as e:
-        raise RuntimeError(f"GMAIL_TOKEN_JSON is not valid JSON: {e}")
-
-    creds = Credentials.from_authorized_user_info(info, SCOPES)
-
-    # If token is expired but has refresh_token, google client will refresh automatically
-    # when making requests (via underlying transport). This typically works in Cloud Run.
-    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+    global _GMAIL_CLIENT
+    if _GMAIL_CLIENT is None:
+        _GMAIL_CLIENT = GmailClient()
+    _GMAIL_CLIENT.ensure_latest_token()  # ✅ picks up Secret Manager latest without redeploy
+    return _GMAIL_CLIENT.service
 
 
 def _db() -> Session:
@@ -120,21 +107,47 @@ def root():
     return {"ok": True, "service": "gmail-pdf-webhook"}
 
 
+def _topic_exists(topic_name: str) -> bool:
+    """
+    Validate the Pub/Sub topic exists. topic_name must be full resource path:
+      projects/<project>/topics/<topic>
+    """
+    client = pubsub_v1.PublisherClient()
+    try:
+        client.get_topic(request={"topic": topic_name})
+        return True
+    except Exception:
+        return False
+
+
 @app.post("/gmail/renew-watch")
 def renew_watch():
     """
-    Called by Cloud Scheduler daily.
+    Called by Cloud Scheduler daily (or more often).
     Creates/renews Gmail watch -> Pub/Sub topic.
     Stores initial last_history_id if empty.
     """
     topic_name = _env_required("GMAIL_PUBSUB_TOPIC")
+
+    # Ensure topic is full path (common gotcha)
+    if not topic_name.startswith("projects/") or "/topics/" not in topic_name:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "GMAIL_PUBSUB_TOPIC must be a full topic resource path like "
+                "'projects/<project>/topics/<topic>'. "
+                f"Got: {topic_name}"
+            ),
+        )
+
     if not _topic_exists(topic_name):
         raise HTTPException(status_code=500, detail=f"GMAIL_PUBSUB_TOPIC does not exist: {topic_name}")
 
     watch_body = {
         "topicName": topic_name,
-        # "labelIds": ["INBOX"],  # optional
-        # "labelFilterAction": "include",  # optional
+        # Optional:
+        # "labelIds": ["INBOX"],
+        # "labelFilterAction": "include",
     }
 
     service = _get_gmail_service()
@@ -142,6 +155,8 @@ def renew_watch():
     try:
         resp = service.users().watch(userId="me", body=watch_body).execute()
     except Exception as e:
+        # Keep detail for debugging; logs will have stack trace if unhandled
+        logger.exception("users.watch failed")
         raise HTTPException(status_code=500, detail=f"users.watch failed: {e}")
 
     history_id = resp.get("historyId")
@@ -150,8 +165,8 @@ def renew_watch():
     try:
         state = _get_or_create_state(db)
 
-        # If state is empty, initialize it to the returned historyId.
-        # If it's already set, we keep it (do not overwrite), because overwriting could skip items.
+        # If state is empty, initialize it to returned historyId.
+        # If already set, keep it (overwriting could skip items).
         if not state.last_history_id and history_id:
             state.last_history_id = str(history_id)
             db.commit()
@@ -291,17 +306,15 @@ async def gmail_webhook_legacy(request: Request):
     """
     return await _handle_pubsub_push(request)
 
-def _topic_exists(topic_name: str) -> bool:
-    client = pubsub_v1.PublisherClient()
-    try:
-        client.get_topic(request={"topic": topic_name})
-        return True
-    except Exception:
-        return False
-    
+
 @app.get("/debug/config")
 def debug_config():
     return {
         "topic": os.getenv("GMAIL_PUBSUB_TOPIC"),
         "service": "gmail-pdf-webhook",
+        "uses": "GmailClient (Secret Manager via GMAIL_PROJECT_ID + GMAIL_TOKEN_SECRET)",
     }
+
+@app.get("/debug/version")
+def debug_version():
+    return {"version": "2026-02-25-healthz-v1"}

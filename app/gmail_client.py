@@ -13,15 +13,22 @@ from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 
-def _load_secret_text(project_id: str, secret_name: str) -> str:
+def _load_secret_text_and_version(project_id: str, secret_name: str) -> tuple[str, str]:
+    """
+    Returns (secret_payload_text, version_resource_name)
+
+    version_resource_name looks like:
+      projects/<proj>/secrets/<secret>/versions/<N>
+    """
     from google.cloud import secretmanager  # pip: google-cloud-secret-manager
+
     client = secretmanager.SecretManagerServiceClient()
     name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
     resp = client.access_secret_version(request={"name": name})
-    return resp.payload.data.decode("utf-8")
+    return resp.payload.data.decode("utf-8"), resp.name
 
 
 @dataclass
@@ -32,38 +39,75 @@ class GmailMessageMeta:
     from_email: Optional[str]
     internal_date: Optional[datetime]  # UTC
 
+
 class GmailClient:
+    """
+    Gmail client that supports two auth modes:
+      - Cloud Run: Secret Manager token JSON via GMAIL_PROJECT_ID + GMAIL_TOKEN_SECRET
+      - Local dev: token.json via GMAIL_TOKEN_PATH (or ./token.json)
+
+    Additionally, when running on Cloud Run, it can auto-reload credentials if
+    Secret Manager "latest" token version changes (no redeploy needed).
+    """
+
     def __init__(self):
-        # local dev convenience (Cloud Run ignores .env unless you baked it in)
+        # local dev convenience (Cloud Run ignores .env unless baked in)
         load_dotenv()
 
-        project_id = os.getenv("GMAIL_PROJECT_ID")
-        token_secret = os.getenv("GMAIL_TOKEN_SECRET")  # e.g. gmail-token-json
+        self.project_id = os.getenv("GMAIL_PROJECT_ID")
+        self.token_secret = os.getenv("GMAIL_TOKEN_SECRET")  # e.g. gmail-token-json
 
-        if project_id and token_secret:
-            token_info = json.loads(_load_secret_text(project_id, token_secret))
-            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-            auth_source = f"secret_manager:{token_secret}"
-        else:
-            # Local fallback
-            token_path = Path(os.getenv("GMAIL_TOKEN_PATH", "./token.json")).resolve()
-            if not token_path.exists():
-                raise FileNotFoundError(
-                    f"token.json not found at: {token_path}. "
-                    "Set GMAIL_PROJECT_ID+GMAIL_TOKEN_SECRET for Cloud Run, "
-                    "or run gmail_auth.py locally."
-                )
-            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-            auth_source = f"file:{token_path}"
+        self._secret_version_name: Optional[str] = None
+        self._auth_source: str = ""
+
+        creds, auth_source, version_name = self._load_creds()
+        self._auth_source = auth_source
+        self._secret_version_name = version_name
 
         print(f"GmailClient auth source = {auth_source}")
         self.service = build("gmail", "v1", credentials=creds)
-        
+
+    def _load_creds(self) -> tuple[Credentials, str, Optional[str]]:
+        if self.project_id and self.token_secret:
+            token_text, version_name = _load_secret_text_and_version(self.project_id, self.token_secret)
+            token_info = json.loads(token_text)
+            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            return creds, f"secret_manager:{self.token_secret}", version_name
+
+        # Local fallback
+        token_path = Path(os.getenv("GMAIL_TOKEN_PATH", "./token.json")).resolve()
+        if not token_path.exists():
+            raise FileNotFoundError(
+                f"token.json not found at: {token_path}. "
+                "Set GMAIL_PROJECT_ID+GMAIL_TOKEN_SECRET for Cloud Run, "
+                "or run scripts/gmail_auth.py locally."
+            )
+        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        return creds, f"file:{token_path}", None
+
+    def ensure_latest_token(self) -> None:
+        """
+        Cloud Run only: Secret Manager "latest" can rotate without restarting the instance.
+        This checks if the version changed; if so, rebuilds the Gmail service with new creds.
+        """
+        if not (self.project_id and self.token_secret):
+            return  # local mode
+
+        token_text, latest_version_name = _load_secret_text_and_version(self.project_id, self.token_secret)
+        if self._secret_version_name != latest_version_name:
+            print(
+                f"Gmail token rotated: {self._secret_version_name} -> {latest_version_name}. Reloading Gmail service..."
+            )
+            token_info = json.loads(token_text)
+            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            self._secret_version_name = latest_version_name
+            self.service = build("gmail", "v1", credentials=creds)
 
     def list_message_ids_by_label(self, label_name: str, max_results: int = 10) -> List[str]:
         """Return Gmail message IDs for a label."""
+        self.ensure_latest_token()
+
         # Gmail API expects label IDs; label names work if they exist as a label.
-        # Safer: look up label ID from name.
         label_id = self._get_label_id_by_name(label_name)
         if not label_id:
             raise ValueError(f"Label not found: {label_name}")
@@ -78,10 +122,17 @@ class GmailClient:
         return [m["id"] for m in msgs]
 
     def fetch_message_meta(self, message_id: str) -> GmailMessageMeta:
+        self.ensure_latest_token()
+
         msg = (
             self.service.users()
             .messages()
-            .get(userId="me", id=message_id, format="metadata", metadataHeaders=["Subject", "From", "Date"])
+            .get(
+                userId="me",
+                id=message_id,
+                format="metadata",
+                metadataHeaders=["Subject", "From", "Date"],
+            )
             .execute()
         )
         headers = {h["name"].lower(): h.get("value") for h in msg.get("payload", {}).get("headers", [])}
@@ -101,12 +152,9 @@ class GmailClient:
 
     def download_pdf_attachments(self, message_id: str) -> List[Tuple[str, bytes]]:
         """Return list of (filename, pdf_bytes)."""
-        msg = (
-            self.service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="full")
-            .execute()
-        )
+        self.ensure_latest_token()
+
+        msg = self.service.users().messages().get(userId="me", id=message_id, format="full").execute()
 
         payload = msg.get("payload", {}) or {}
         parts = payload.get("parts", []) or []
@@ -117,6 +165,7 @@ class GmailClient:
                 mime = (p.get("mimeType") or "").lower()
                 filename = p.get("filename") or ""
                 body = p.get("body") or {}
+
                 # Nested multiparts
                 if p.get("parts"):
                     walk(p["parts"])
@@ -151,6 +200,8 @@ class GmailClient:
         return base64.urlsafe_b64decode(data.encode("utf-8"))
 
     def _get_label_id_by_name(self, label_name: str) -> Optional[str]:
+        self.ensure_latest_token()
+
         labels = self.service.users().labels().list(userId="me").execute().get("labels", []) or []
         for l in labels:
             if l.get("name") == label_name:
