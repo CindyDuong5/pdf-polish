@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import google.auth
+import requests
 from fastapi import FastAPI, HTTPException, Request
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.cloud import pubsub_v1
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -14,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.gmail_client import GmailClient  # ✅ unified auth path
 from app.models import GmailJob, GmailState
-import logging
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PDF Polish Gmail Push Webhook", version="0.1.0")
@@ -96,17 +100,6 @@ def _extract_message_ids_from_history(history_list: List[Dict[str, Any]]) -> Set
     return mids
 
 
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-
-@app.get("/")
-def root():
-    # Avoid confusing 404s from casual browser checks / health probes.
-    return {"ok": True, "service": "gmail-pdf-webhook"}
-
-
 def _topic_exists(topic_name: str) -> bool:
     """
     Validate the Pub/Sub topic exists. topic_name must be full resource path:
@@ -118,6 +111,49 @@ def _topic_exists(topic_name: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _trigger_gmail_worker_job() -> Dict[str, Any]:
+    """
+    Option C: Pub/Sub -> webhook -> trigger Cloud Run Job immediately.
+
+    Requires the Cloud Run service account (this webhook) to have:
+      roles/run.invoker on the Cloud Run Job (gmail-worker)
+    """
+    region = os.getenv("GCP_REGION", "northamerica-northeast1")
+    project_id = _env_required("GMAIL_PROJECT_ID")
+    job_name = os.getenv("GMAIL_WORKER_JOB_NAME", "gmail-worker")
+
+    url = (
+        f"https://{region}-run.googleapis.com/apis/run.googleapis.com/v1/"
+        f"namespaces/{project_id}/jobs/{job_name}:run"
+    )
+
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(GoogleAuthRequest())
+
+    r = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {creds.token}",
+            "Content-Type": "application/json",
+        },
+        json={},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+@app.get("/")
+def root():
+    # Avoid confusing 404s from casual browser checks / health probes.
+    return {"ok": True, "service": "gmail-pdf-webhook"}
 
 
 @app.post("/gmail/renew-watch")
@@ -155,7 +191,6 @@ def renew_watch():
     try:
         resp = service.users().watch(userId="me", body=watch_body).execute()
     except Exception as e:
-        # Keep detail for debugging; logs will have stack trace if unhandled
         logger.exception("users.watch failed")
         raise HTTPException(status_code=500, detail=f"users.watch failed: {e}")
 
@@ -258,6 +293,9 @@ async def _handle_pubsub_push(request: Request) -> Dict[str, Any]:
 
         # Enqueue message IDs (idempotent)
         for mid in message_ids:
+            # IMPORTANT:
+            # Use the status value your worker expects (NEW vs QUEUED).
+            # If your worker queries status='NEW', change this to "NEW".
             job = GmailJob(gmail_message_id=mid, label=None, status="QUEUED", error=None)
             db.add(job)
             try:
@@ -276,6 +314,21 @@ async def _handle_pubsub_push(request: Request) -> Dict[str, Any]:
 
         db.commit()
 
+        # ✅ Option C: trigger worker job immediately (only if we actually added something)
+        job_triggered = False
+        job_execution_name: Optional[str] = None
+        job_trigger_error: Optional[str] = None
+
+        if enqueued > 0:
+            try:
+                run_resp = _trigger_gmail_worker_job()
+                job_triggered = True
+                job_execution_name = run_resp.get("name")
+            except Exception as e:
+                # Still ACK push; the queue is already written.
+                logger.exception("Failed to trigger gmail-worker job")
+                job_trigger_error = str(e)
+
         return {
             "ok": True,
             "emailAddress": email_address,
@@ -285,6 +338,9 @@ async def _handle_pubsub_push(request: Request) -> Dict[str, Any]:
             "message_ids_found": len(message_ids),
             "enqueued": enqueued,
             "skipped_duplicates": skipped,
+            "job_triggered": job_triggered,
+            "job_execution_name": job_execution_name,
+            "job_trigger_error": job_trigger_error,
         }
     finally:
         db.close()
@@ -313,8 +369,11 @@ def debug_config():
         "topic": os.getenv("GMAIL_PUBSUB_TOPIC"),
         "service": "gmail-pdf-webhook",
         "uses": "GmailClient (Secret Manager via GMAIL_PROJECT_ID + GMAIL_TOKEN_SECRET)",
+        "gcp_region": os.getenv("GCP_REGION"),
+        "gmail_worker_job_name": os.getenv("GMAIL_WORKER_JOB_NAME"),
     }
+
 
 @app.get("/debug/version")
 def debug_version():
-    return {"version": "2026-02-25-healthz-v1"}
+    return {"version": "2026-02-26-option-c-trigger-job-v1"}

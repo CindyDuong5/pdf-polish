@@ -1,6 +1,8 @@
 # app/jobs_worker.py
 from __future__ import annotations
 
+import io
+import re
 import os
 import sys
 import uuid
@@ -8,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -23,15 +27,45 @@ def iso_date_utc(dt: datetime | None) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
-def make_styled_draft_key(original_key: str, doc_id: uuid.UUID) -> str:
-    """
-    Keep date partition consistent with original:
-      original/YYYY-MM-DD/<doc_id>.pdf
-      styled_draft/YYYY-MM-DD/<doc_id>.pdf
-    """
-    parts = original_key.split("/", 2)
-    day = parts[1] if len(parts) >= 2 else iso_date_utc(None)
+def styled_draft_key_from_original(original_key: str, doc_id: uuid.UUID) -> str:
+    parts = original_key.split("/")
+    day = parts[1] if len(parts) >= 3 else iso_date_utc(None)
     return f"styled_draft/{day}/{doc_id}.pdf"
+
+
+def stamp_pdf_bytes(pdf_bytes: bytes, text_to_stamp: str) -> bytes:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+
+    for page in reader.pages:
+        w = float(page.mediabox.width)
+        h = float(page.mediabox.height)
+
+        overlay_buf = io.BytesIO()
+        c = canvas.Canvas(overlay_buf, pagesize=(w, h))
+
+        c.saveState()
+        c.setFont("Helvetica-Bold", 42)
+        c.translate(w / 2, h / 2)
+        c.rotate(25)
+        c.drawCentredString(0, 0, text_to_stamp)
+        c.restoreState()
+
+        c.setFont("Helvetica-Bold", 14)
+        c.drawRightString(w - 24, h - 24, text_to_stamp)
+
+        c.save()
+        overlay_buf.seek(0)
+
+        overlay_reader = PdfReader(overlay_buf)
+        overlay_page = overlay_reader.pages[0]
+        page.merge_page(overlay_page)
+
+        writer.add_page(page)
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
 @dataclass
@@ -86,10 +120,6 @@ def mark_error(db, job_id: int, err: str) -> None:
 
 
 def document_exists_for_inbound(db, inbound_id, filename: str) -> bool:
-    """
-    Prevent duplicate Document rows if the same gmail job replays.
-    Uses extracted_fields->>'source_filename' as a simple idempotency key.
-    """
     sql = text(
         """
         SELECT 1
@@ -102,6 +132,41 @@ def document_exists_for_inbound(db, inbound_id, filename: str) -> bool:
     row = db.execute(sql, {"inbound_id": inbound_id, "filename": filename}).first()
     return row is not None
 
+
+def guess_kind(subject: str | None, filename: str | None) -> str:
+    """
+    Determine Document.doc_type from subject + filename.
+    Matches your schema:
+      INVOICE | SERVICE_QUOTE | PROJECT_QUOTE | JOB_REPORT | OTHER
+
+    Priority:
+      INVOICE > JOB_REPORT > SERVICE_QUOTE/PROJECT_QUOTE > OTHER
+    """
+    s = (subject or "").lower()
+    f = (filename or "").lower()
+    hay = f"{f} {s}"
+    hay = re.sub(r"[\-_]+", " ", hay)
+
+    # 1) Invoice
+    if "invoice" in hay:
+        return "INVOICE"
+
+    # 2) Job report (more strict than "report" alone)
+    if "job report" in hay or ("job" in hay and "report" in hay):
+        return "JOB_REPORT"
+
+    # 3) Quotes
+    if "project quote" in hay:
+        return "PROJECT_QUOTE"
+
+    if "service quote" in hay or "quote service" in hay:
+        return "SERVICE_QUOTE"
+
+    # 4) Generic "quote" fallback
+    if "quote" in hay:
+        return "SERVICE_QUOTE"  # choose your default
+
+    return "OTHER"
 
 def main(max_jobs: int = 10) -> int:
     gmail = GmailClient()
@@ -120,12 +185,10 @@ def main(max_jobs: int = 10) -> int:
             print(f"Claimed job {job.id} gmail_message_id={job.gmail_message_id}")
 
             try:
-                # 1) Fetch message meta + attachments by gmail_message_id
                 meta = gmail.fetch_message_meta(job.gmail_message_id)
                 pdfs = gmail.download_pdf_attachments(job.gmail_message_id)
                 print(f"Found {len(pdfs)} PDF attachments")
-                
-                # 2) Idempotent inbound insert (UNIQUE gmail_message_id)
+
                 inbound = InboundEmail(
                     gmail_message_id=meta.message_id,
                     from_email=meta.from_email,
@@ -153,12 +216,10 @@ def main(max_jobs: int = 10) -> int:
                             f"Duplicate gmail_message_id but inbound row not found: {meta.message_id}"
                         )
 
-                if created:
-                    print(f"Inbound created: id={inbound.id} gmail_message_id={meta.message_id}")
-                else:
-                    print(f"Inbound reused:  id={inbound.id} gmail_message_id={meta.message_id}")
+                print(
+                    f"Inbound {'created' if created else 'reused'}: id={inbound.id} gmail_message_id={meta.message_id}"
+                )
 
-                # 3) Handle no PDFs
                 if not pdfs:
                     inbound.status = "PARSED"
                     inbound.error = "No PDF attachments found"
@@ -168,7 +229,6 @@ def main(max_jobs: int = 10) -> int:
                     processed += 1
                     continue
 
-                # 4) Upload PDFs + create Document rows (idempotent per inbound+filename)
                 for filename, pdf_bytes in pdfs:
                     if document_exists_for_inbound(db, inbound.id, filename):
                         print(f"SKIP doc (already exists for inbound {inbound.id}): {filename}")
@@ -180,13 +240,18 @@ def main(max_jobs: int = 10) -> int:
                     original_key = f"original/{day}/{doc_id}.pdf"
                     s3.upload_pdf_bytes(original_key, pdf_bytes)
 
-                    styled_key = make_styled_draft_key(original_key, doc_id)
-                    s3.copy_pdf(original_key, styled_key)
+                    # Create a simple stamped draft right away (so frontend can preview)
+                    draft_key = styled_draft_key_from_original(original_key, doc_id)
+                    draft_bytes = stamp_pdf_bytes(pdf_bytes, "RESTYLED DRAFT")
+                    s3.upload_pdf_bytes(draft_key, draft_bytes)
+
+                    doc_type_guess = guess_kind(meta.subject, filename)
+                    print("DOC TYPE GUESS:", doc_type_guess, "| subject=", meta.subject, "| filename=", filename)
 
                     doc = Document(
                         id=doc_id,
                         inbound_email_id=inbound.id,
-                        doc_type="OTHER",
+                        doc_type=doc_type_guess,
                         property_address=None,
                         customer_name=None,
                         customer_email=None,
@@ -194,23 +259,24 @@ def main(max_jobs: int = 10) -> int:
                         quote_number=None,
                         job_report_number=None,
                         original_s3_key=original_key,
-                        styled_draft_s3_key=styled_key,
+                        styled_draft_s3_key=draft_key,
                         final_s3_key=None,
                         status="READY_FOR_REVIEW",
                         extracted_fields={
                             "source_filename": filename,
                             "gmail_message_id": meta.message_id,
+                            "doc_type_guess": doc_type_guess,
                         },
                     )
                     db.add(doc)
                     db.commit()
 
                     print(f"Uploaded {filename} -> s3://{s3.bucket}/{original_key}")
-                    print(f"Draft ready -> s3://{s3.bucket}/{styled_key}")
+                    print(f"Draft created -> s3://{s3.bucket}/{draft_key}")
+                    print("Doc status=READY_FOR_REVIEW")
 
                 inbound.status = "PARSED"
                 db.commit()
-
                 mark_done(db, job.id)
                 print(f"Job {job.id}: DONE")
                 processed += 1
@@ -222,25 +288,10 @@ def main(max_jobs: int = 10) -> int:
                 mark_error(db, job.id, err)
 
         return processed
-
     finally:
         db.close()
 
 
-def guess_kind(subject: str | None, filename: str | None) -> str:
-    s = (subject or "").lower()
-    f = (filename or "").lower()
-
-    if "invoice" in s or "invoice" in f:
-        return "invoice"
-    if "quote" in s or "quote" in f:
-        return "quote"
-    if "report" in s or "job report" in s or "report" in f:
-        return "job"
-    return "invoice"  # default
-
-
 if __name__ == "__main__":
-    # Allow override from env (Cloud Run Job)
     max_jobs = int(os.getenv("MAX_JOBS", "10"))
     main(max_jobs=max_jobs)

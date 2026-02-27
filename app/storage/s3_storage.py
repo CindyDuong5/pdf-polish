@@ -61,7 +61,10 @@ class S3Storage:
             ContentType="application/pdf",
             MetadataDirective="REPLACE",
         )
-
+    def download_bytes(self, key: str) -> bytes:
+        resp = self.s3.get_object(Bucket=self.bucket, Key=key)
+        return resp["Body"].read()
+    
     def presign_get_url(
         self,
         key: str,

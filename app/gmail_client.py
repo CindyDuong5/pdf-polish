@@ -71,6 +71,11 @@ class GmailClient:
         if self.project_id and self.token_secret:
             token_text, version_name = _load_secret_text_and_version(self.project_id, self.token_secret)
             token_info = json.loads(token_text)
+            print("GMAIL TOKEN SECRET VERSION =", version_name)
+            print("TOKEN SCOPES =", token_info.get("scopes"))
+            print("HAS REFRESH TOKEN =", bool(token_info.get("refresh_token")))
+
+            # ✅ Use scopes stored in token JSON if present, fallback to SCOPES
             creds = Credentials.from_authorized_user_info(token_info, SCOPES)
             return creds, f"secret_manager:{self.token_secret}", version_name
 
@@ -82,14 +87,12 @@ class GmailClient:
                 "Set GMAIL_PROJECT_ID+GMAIL_TOKEN_SECRET for Cloud Run, "
                 "or run scripts/gmail_auth.py locally."
             )
+
+        # ✅ Same idea locally: token file already includes scopes, but keep SCOPES as fallback
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
         return creds, f"file:{token_path}", None
 
     def ensure_latest_token(self) -> None:
-        """
-        Cloud Run only: Secret Manager "latest" can rotate without restarting the instance.
-        This checks if the version changed; if so, rebuilds the Gmail service with new creds.
-        """
         if not (self.project_id and self.token_secret):
             return  # local mode
 
@@ -99,7 +102,10 @@ class GmailClient:
                 f"Gmail token rotated: {self._secret_version_name} -> {latest_version_name}. Reloading Gmail service..."
             )
             token_info = json.loads(token_text)
+
+            # ✅ Use token's scopes if present
             creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+
             self._secret_version_name = latest_version_name
             self.service = build("gmail", "v1", credentials=creds)
 

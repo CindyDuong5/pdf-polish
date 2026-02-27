@@ -1,16 +1,20 @@
 # app/api_main.py
+
 from __future__ import annotations
 
 import os
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.s3_storage import get_storage
+from app.services.keys import final_key
+from app.services.pdf_stamp import stamp_pdf
+from app.services.styling_service import ensure_draft
 
 load_dotenv()
 
@@ -53,14 +57,8 @@ def list_documents(
     status: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    """
-    Uses your existing schema:
-      - doc_type (invoice/quote/job/etc.)
-      - invoice_number / quote_number / job_report_number
-      - customer_name / property_address optional
-    """
     where = []
-    params = {"limit": limit}
+    params: dict = {"limit": limit}
 
     if doc_type:
         where.append("doc_type = :doc_type")
@@ -130,10 +128,6 @@ def presign_document(
     which: Literal["original", "styled_draft", "final"] = "styled_draft",
     expires_seconds: int = 3600,
 ):
-    """
-    Returns a presigned S3 URL for opening in browser.
-    Kept mainly for debugging; frontend should prefer /links.
-    """
     sql = text(
         """
         SELECT
@@ -179,10 +173,6 @@ def presign_document(
 
 @app.get("/api/documents/{doc_id}/links")
 def get_document_links(doc_id: str, expires_seconds: int = 3600):
-    """
-    Returns presigned URLs (only for keys that exist in DB).
-    Frontend should use this endpoint.
-    """
     sql = text(
         """
         SELECT
@@ -205,8 +195,6 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
             raise HTTPException(status_code=404, detail="Not found")
 
         storage = get_storage()
-
-        # Nice filename for browser tab / download
         label = row["invoice_number"] or row["quote_number"] or row["job_report_number"] or row["id"]
         filename = f"{row['doc_type']}_{label}.pdf"
 
@@ -228,3 +216,120 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
             "styled_draft": {"key": row["styled_draft_s3_key"], "url": url_for(row["styled_draft_s3_key"])},
             "final": {"key": row["final_s3_key"], "url": url_for(row["final_s3_key"])},
         }
+
+
+@app.post("/api/documents/{doc_id}/generate-draft")
+def generate_draft(doc_id: str, force: bool = False):
+    """
+    Manual draft generation / regeneration.
+    (In your desired flow, worker generates drafts automatically on ingest.)
+    """
+    with SessionLocal() as db:
+        try:
+            key = ensure_draft(db, doc_id, force=force)
+            return {"ok": True, "styled_draft_s3_key": key}
+        except Exception as e:
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET status='ERROR', updated_at=now(), error=:err
+                    WHERE id=:id
+                    """
+                ),
+                {"id": doc_id, "err": f"{type(e).__name__}: {e}"[:1000]},
+            )
+            db.commit()
+            raise
+
+
+@app.post("/api/documents/{doc_id}/finalize")
+def finalize_document(
+    doc_id: str,
+    body: dict = Body(default={"text": "This is final"}),
+    force: bool = False,
+):
+    """
+    Creates/overwrites FINAL by stamping text onto the DRAFT (preferred),
+    or ORIGINAL if no draft exists yet.
+    """
+    stamp_text = (body.get("text") or "This is final").strip() or "This is final"
+    storage = get_storage()
+
+    with SessionLocal() as db:
+        row = db.execute(
+            text(
+                """
+                SELECT id, original_s3_key, styled_draft_s3_key, final_s3_key
+                FROM public.documents
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if row["final_s3_key"] and not force:
+            return {
+                "ok": True,
+                "note": "Final already exists (use force=true to regenerate).",
+                "final_s3_key": row["final_s3_key"],
+            }
+
+        original_key = row["original_s3_key"]
+        draft_key = row["styled_draft_s3_key"]
+        if not original_key:
+            raise HTTPException(status_code=400, detail="Document missing original_s3_key")
+
+        source_key = draft_key or original_key
+        final_key_path = final_key(original_key, doc_id)
+
+        db.execute(
+            text(
+                """
+                UPDATE public.documents
+                SET status='FINALIZING', updated_at=now(), error=null
+                WHERE id=:id
+                """
+            ),
+            {"id": doc_id},
+        )
+        db.commit()
+
+        try:
+            src_bytes = storage.download_bytes(source_key)
+            final_bytes = stamp_pdf(src_bytes, stamp_text)
+            storage.upload_pdf_bytes(final_key_path, final_bytes)
+
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET final_s3_key=:k,
+                        status='FINALIZED',
+                        updated_at=now(),
+                        error=null
+                    WHERE id=:id
+                    """
+                ),
+                {"id": doc_id, "k": final_key_path},
+            )
+            db.commit()
+
+            return {"ok": True, "final_s3_key": final_key_path, "source_used": source_key}
+
+        except Exception as e:
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET status='ERROR', updated_at=now(), error=:err
+                    WHERE id=:id
+                    """
+                ),
+                {"id": doc_id, "err": f"{type(e).__name__}: {e}"[:1000]},
+            )
+            db.commit()
+            raise
