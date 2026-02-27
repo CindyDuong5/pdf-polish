@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.s3_storage import get_storage
+
 from app.services.keys import final_key
 from app.services.pdf_stamp import stamp_pdf
 from app.services.styling_service import ensure_draft
@@ -218,31 +219,6 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
         }
 
 
-@app.post("/api/documents/{doc_id}/generate-draft")
-def generate_draft(doc_id: str, force: bool = False):
-    """
-    Manual draft generation / regeneration.
-    (In your desired flow, worker generates drafts automatically on ingest.)
-    """
-    with SessionLocal() as db:
-        try:
-            key = ensure_draft(db, doc_id, force=force)
-            return {"ok": True, "styled_draft_s3_key": key}
-        except Exception as e:
-            db.execute(
-                text(
-                    """
-                    UPDATE public.documents
-                    SET status='ERROR', updated_at=now(), error=:err
-                    WHERE id=:id
-                    """
-                ),
-                {"id": doc_id, "err": f"{type(e).__name__}: {e}"[:1000]},
-            )
-            db.commit()
-            raise
-
-
 @app.post("/api/documents/{doc_id}/finalize")
 def finalize_document(
     doc_id: str,
@@ -333,3 +309,9 @@ def finalize_document(
             )
             db.commit()
             raise
+
+@app.post("/api/documents/{doc_id}/restyle")
+def restyle_document(doc_id: str):
+    with SessionLocal() as db:
+        key = ensure_draft(db, doc_id, force=True)
+        return {"ok": True, "styled_draft_s3_key": key}

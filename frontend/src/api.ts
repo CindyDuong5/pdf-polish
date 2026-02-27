@@ -24,18 +24,10 @@ export async function getLinks(docId: string) {
   return res.json();
 }
 
-export async function finalizeDoc(docId: string, text: string, force: boolean = false) {
-  const usp = new URLSearchParams();
-  if (force) usp.set("force", "true");
-
-  const res = await fetch(
-    `${API_BASE}/api/documents/${docId}/finalize${usp.toString() ? `?${usp.toString()}` : ""}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    }
-  );
+export async function restyleDoc(docId: string) {
+  const res = await fetch(`${API_BASE}/api/documents/${docId}/restyle`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

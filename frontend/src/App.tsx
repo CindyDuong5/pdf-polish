@@ -1,6 +1,6 @@
 // frontend/src/App.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { finalizeDoc, getLinks, listDocuments } from "./api";
+import { getLinks, listDocuments, restyleDoc } from "./api";
 
 type DocRow = {
   id: string;
@@ -34,7 +34,6 @@ export default function App() {
 
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
-  const [finalText, setFinalText] = useState("This is final");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -137,16 +136,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.styled_draft_s3_key]);
 
-  async function onFinalize() {
+  async function onRestyle() {
     if (!selectedId) return;
     setLoading(true);
     setMsg(null);
     setErr(null);
+
     try {
-      await finalizeDoc(selectedId, finalText);
+      await restyleDoc(selectedId);
+
+      // refresh list so selected row updates (styled_draft_s3_key + status)
       await refreshList();
-      await refreshLinks(selectedId); // force refresh links after finalize
-      setMsg("Final saved ✅");
+
+      // refresh links so iframe gets the new presigned URL
+      await refreshLinks(selectedId);
+
+      setMsg("Restyle complete ✅");
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
@@ -251,19 +256,14 @@ export default function App() {
               </div>
 
               <div style={{ display: "flex", gap: 8 }}>
-                <button disabled={loading} onClick={onFinalize} style={{ padding: "10px 12px" }}>
-                  Save Final
+                <button
+                  disabled={loading || !selectedId}
+                  onClick={onRestyle}
+                  style={{ padding: "10px 12px" }}
+                >
+                  {loading ? "Restyling..." : "Restyle"}
                 </button>
               </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
-              <div style={{ fontSize: 13, color: "#444" }}>Final text:</div>
-              <input
-                value={finalText}
-                onChange={(e) => setFinalText(e.target.value)}
-                style={{ flex: 1, padding: 8 }}
-              />
             </div>
 
             {msg ? (

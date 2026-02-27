@@ -1,17 +1,14 @@
 # app/jobs_worker.py
 from __future__ import annotations
 
-import io
-import re
 import os
+import re
 import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from pypdf import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -25,47 +22,6 @@ def iso_date_utc(dt: datetime | None) -> str:
     if not dt:
         dt = datetime.now(timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
-
-
-def styled_draft_key_from_original(original_key: str, doc_id: uuid.UUID) -> str:
-    parts = original_key.split("/")
-    day = parts[1] if len(parts) >= 3 else iso_date_utc(None)
-    return f"styled_draft/{day}/{doc_id}.pdf"
-
-
-def stamp_pdf_bytes(pdf_bytes: bytes, text_to_stamp: str) -> bytes:
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    writer = PdfWriter()
-
-    for page in reader.pages:
-        w = float(page.mediabox.width)
-        h = float(page.mediabox.height)
-
-        overlay_buf = io.BytesIO()
-        c = canvas.Canvas(overlay_buf, pagesize=(w, h))
-
-        c.saveState()
-        c.setFont("Helvetica-Bold", 42)
-        c.translate(w / 2, h / 2)
-        c.rotate(25)
-        c.drawCentredString(0, 0, text_to_stamp)
-        c.restoreState()
-
-        c.setFont("Helvetica-Bold", 14)
-        c.drawRightString(w - 24, h - 24, text_to_stamp)
-
-        c.save()
-        overlay_buf.seek(0)
-
-        overlay_reader = PdfReader(overlay_buf)
-        overlay_page = overlay_reader.pages[0]
-        page.merge_page(overlay_page)
-
-        writer.add_page(page)
-
-    out = io.BytesIO()
-    writer.write(out)
-    return out.getvalue()
 
 
 @dataclass
@@ -134,39 +90,23 @@ def document_exists_for_inbound(db, inbound_id, filename: str) -> bool:
 
 
 def guess_kind(subject: str | None, filename: str | None) -> str:
-    """
-    Determine Document.doc_type from subject + filename.
-    Matches your schema:
-      INVOICE | SERVICE_QUOTE | PROJECT_QUOTE | JOB_REPORT | OTHER
-
-    Priority:
-      INVOICE > JOB_REPORT > SERVICE_QUOTE/PROJECT_QUOTE > OTHER
-    """
     s = (subject or "").lower()
     f = (filename or "").lower()
     hay = f"{f} {s}"
     hay = re.sub(r"[\-_]+", " ", hay)
 
-    # 1) Invoice
     if "invoice" in hay:
         return "INVOICE"
-
-    # 2) Job report (more strict than "report" alone)
     if "job report" in hay or ("job" in hay and "report" in hay):
         return "JOB_REPORT"
-
-    # 3) Quotes
     if "project quote" in hay:
         return "PROJECT_QUOTE"
-
     if "service quote" in hay or "quote service" in hay:
         return "SERVICE_QUOTE"
-
-    # 4) Generic "quote" fallback
     if "quote" in hay:
-        return "SERVICE_QUOTE"  # choose your default
-
+        return "SERVICE_QUOTE"
     return "OTHER"
+
 
 def main(max_jobs: int = 10) -> int:
     gmail = GmailClient()
@@ -217,7 +157,8 @@ def main(max_jobs: int = 10) -> int:
                         )
 
                 print(
-                    f"Inbound {'created' if created else 'reused'}: id={inbound.id} gmail_message_id={meta.message_id}"
+                    f"Inbound {'created' if created else 'reused'}: "
+                    f"id={inbound.id} gmail_message_id={meta.message_id}"
                 )
 
                 if not pdfs:
@@ -237,17 +178,14 @@ def main(max_jobs: int = 10) -> int:
                     doc_id = uuid.uuid4()
                     day = iso_date_utc(meta.internal_date)
 
-                    original_key = f"original/{day}/{doc_id}.pdf"
-                    s3.upload_pdf_bytes(original_key, pdf_bytes)
-
-                    # Create a simple stamped draft right away (so frontend can preview)
-                    draft_key = styled_draft_key_from_original(original_key, doc_id)
-                    draft_bytes = stamp_pdf_bytes(pdf_bytes, "RESTYLED DRAFT")
-                    s3.upload_pdf_bytes(draft_key, draft_bytes)
-
                     doc_type_guess = guess_kind(meta.subject, filename)
                     print("DOC TYPE GUESS:", doc_type_guess, "| subject=", meta.subject, "| filename=", filename)
 
+                    # Upload ORIGINAL only
+                    original_key = f"original/{day}/{doc_id}.pdf"
+                    s3.upload_pdf_bytes(original_key, pdf_bytes)
+
+                    # Create Document row with NO draft yet
                     doc = Document(
                         id=doc_id,
                         inbound_email_id=inbound.id,
@@ -259,9 +197,9 @@ def main(max_jobs: int = 10) -> int:
                         quote_number=None,
                         job_report_number=None,
                         original_s3_key=original_key,
-                        styled_draft_s3_key=draft_key,
+                        styled_draft_s3_key=None,
                         final_s3_key=None,
-                        status="READY_FOR_REVIEW",
+                        status="NEW",  # frontend will click Generate Draft
                         extracted_fields={
                             "source_filename": filename,
                             "gmail_message_id": meta.message_id,
@@ -272,8 +210,7 @@ def main(max_jobs: int = 10) -> int:
                     db.commit()
 
                     print(f"Uploaded {filename} -> s3://{s3.bucket}/{original_key}")
-                    print(f"Draft created -> s3://{s3.bucket}/{draft_key}")
-                    print("Doc status=READY_FOR_REVIEW")
+                    print("Doc status=NEW (no draft yet)")
 
                 inbound.status = "PARSED"
                 db.commit()
