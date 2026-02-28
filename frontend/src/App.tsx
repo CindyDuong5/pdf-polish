@@ -1,49 +1,76 @@
 // frontend/src/App.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getLinks, listDocuments, restyleDoc } from "./api";
+import { getFields, getLinks, listDocuments, restyleDoc, saveFinal } from "./api";
+import type { DocRow, Links, ServiceQuoteFields } from "./types";
+import PreviewCard from "./components/PreviewCard";
+import ServiceQuoteEditor from "./components/ServiceQuoteEditor";
+import "./styles.css";
 
-type DocRow = {
-  id: string;
-  doc_type: string | null;
-  status: string | null;
-  customer_name: string | null;
-  property_address: string | null;
-  invoice_number: string | null;
-  quote_number: string | null;
-  job_report_number: string | null;
-  created_at: string | null;
-  original_s3_key: string | null;
-  styled_draft_s3_key: string | null;
-  final_s3_key: string | null;
-  error: string | null;
-};
+function emptySQ(): ServiceQuoteFields {
+  return {
+    client_name: "",
+    client_phone: "",
+    client_email: "",
+    company_name: "",
+    company_address: "",
+    property_name: "",
+    property_address: "",
+    quote_number: "",
+    quote_date: "",
+    quote_description: "",
+    items: [],
+    subtotal: "",
+    tax: "",
+    total: "",
+  };
+}
 
-type Links = {
-  id: string;
-  doc_type: string;
-  filename: string;
-  original: { key: string | null; url: string | null };
-  styled_draft: { key: string | null; url: string | null };
-  final: { key: string | null; url: string | null };
-};
+// Ontario HST default
+const DEFAULT_TAX_RATE = 0.13;
+
+function parseMoney(v: string | undefined | null): number {
+  const t = String(v ?? "").replace(/[^0-9.\-]/g, "").trim();
+  const n = Number(t);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function money2(n: number): string {
+  return (Math.round(n * 100) / 100).toFixed(2);
+}
+
+/**
+ * ALWAYS recompute subtotal/tax/total from item prices.
+ * (Totals are display-only in the editor; backend also enforces.)
+ */
+function withComputedTotals(f: ServiceQuoteFields): ServiceQuoteFields {
+  const itemsSubtotal = (f.items || []).reduce((sum, it) => sum + parseMoney(it.price), 0);
+  const subtotal = Math.round(itemsSubtotal * 100) / 100;
+  const tax = Math.round(subtotal * DEFAULT_TAX_RATE * 100) / 100;
+  const total = Math.round((subtotal + tax) * 100) / 100;
+
+  return {
+    ...f,
+    subtotal: money2(subtotal),
+    tax: money2(tax),
+    total: money2(total),
+  };
+}
 
 export default function App() {
   const [items, setItems] = useState<DocRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [links, setLinks] = useState<Links | null>(null);
 
-  const [q, setQ] = useState("");
+  // Keep only status filter for now
   const [status, setStatus] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // Used to force iframe reload WITHOUT modifying presigned URLs.
-  // We'll ONLY bump this when URLs actually change (no blinking).
-  const [reloadKey, setReloadKey] = useState<number>(() => Date.now());
+  const [fields, setFields] = useState<ServiceQuoteFields | null>(null);
 
-  // Auto-refresh timer while draft is still generating
+  const [reloadKey, setReloadKey] = useState<number>(() => Date.now());
   const pollRef = useRef<number | null>(null);
 
   const selected = useMemo(
@@ -51,10 +78,11 @@ export default function App() {
     [items, selectedId]
   );
 
+  const isServiceQuote = (selected?.doc_type || "").toUpperCase().includes("SERVICE_QUOTE");
+
   async function refreshList() {
     setErr(null);
     const data = await listDocuments({
-      q: q || undefined,
       status: status || undefined,
       limit: 50,
     });
@@ -63,17 +91,21 @@ export default function App() {
 
   async function refreshLinks(id: string) {
     const data = await getLinks(id);
-
-    // Only trigger iframe reload if any URL actually changed.
     setLinks((prev) => {
       const changed =
         prev?.original?.url !== data?.original?.url ||
         prev?.styled_draft?.url !== data?.styled_draft?.url ||
         prev?.final?.url !== data?.final?.url;
-
       if (changed) setReloadKey(Date.now());
       return data;
     });
+  }
+
+  async function refreshFields(id: string) {
+    const data = await getFields(id);
+    const next = (data?.draft || data?.final || null) as ServiceQuoteFields | null;
+    if (next) setFields(withComputedTotals(next));
+    else setFields(null);
   }
 
   // Initial load
@@ -82,56 +114,49 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // When selecting a document, fetch its links once
+  // When selecting doc: links + fields
   useEffect(() => {
     if (!selectedId) {
       setLinks(null);
+      setFields(null);
       return;
     }
     refreshLinks(selectedId).catch((e) => setErr(String(e)));
+    refreshFields(selectedId).catch(() => setFields(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
-  // Poll ONLY the list while draft is missing or status indicates processing.
-  // (Do NOT refreshLinks on every poll — that caused the blinking.)
+  // Poll list while processing (no blinking)
   useEffect(() => {
     if (pollRef.current) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
     }
-
     if (!selectedId || !selected) return;
 
     const draftMissing = !selected.styled_draft_s3_key;
     const st = (selected.status || "").toUpperCase();
-    const stillProcessing = st === "NEW" || st === "STYLING";
+    const stillProcessing = st === "NEW" || st === "STYLING" || st === "FINALIZING";
 
     if (draftMissing || stillProcessing) {
       pollRef.current = window.setInterval(() => {
-        refreshList().catch(() => {
-          // ignore polling errors
-        });
+        refreshList().catch(() => {});
       }, 2500);
     }
 
     return () => {
-      if (pollRef.current) {
-        window.clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      if (pollRef.current) window.clearInterval(pollRef.current);
+      pollRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, selected?.status, selected?.styled_draft_s3_key]);
 
-  // When draft first appears (styled_draft_s3_key becomes available),
-  // refresh links ONCE so the draft iframe shows up.
+  // When draft appears, refresh links+fields once
   useEffect(() => {
     if (!selectedId || !selected) return;
-
     if (selected.styled_draft_s3_key) {
-      refreshLinks(selectedId).catch(() => {
-        // ignore
-      });
+      refreshLinks(selectedId).catch(() => {});
+      refreshFields(selectedId).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.styled_draft_s3_key]);
@@ -145,13 +170,35 @@ export default function App() {
     try {
       await restyleDoc(selectedId);
 
-      // refresh list so selected row updates (styled_draft_s3_key + status)
       await refreshList();
-
-      // refresh links so iframe gets the new presigned URL
       await refreshLinks(selectedId);
+      await refreshFields(selectedId);
 
-      setMsg("Restyle complete ✅");
+      setMsg("Restyle complete ✅ Draft + fields ready.");
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onSaveFinal() {
+    if (!selectedId) return;
+    const f = fields ? withComputedTotals(fields) : null;
+    if (!f) return;
+
+    setLoading(true);
+    setMsg(null);
+    setErr(null);
+
+    try {
+      await saveFinal(selectedId, f);
+
+      await refreshList();
+      await refreshLinks(selectedId);
+      await refreshFields(selectedId);
+
+      setMsg("Saved Final ✅");
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
@@ -163,183 +210,145 @@ export default function App() {
   const draftUrl = links?.styled_draft?.url || null;
   const finalUrl = links?.final?.url || null;
 
+  const topLabel =
+    selected?.invoice_number ||
+    selected?.quote_number ||
+    selected?.job_report_number ||
+    (selected?.id ? selected.id.slice(0, 8) : "");
+
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "system-ui" }}>
-      {/* Left: List */}
-      <div style={{ width: 420, borderRight: "1px solid #ddd", padding: 12, overflow: "auto" }}>
-        <h2 style={{ margin: "8px 0" }}>PDF Polish</h2>
-
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input
-            placeholder="Search invoice/quote/job/customer/address..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            style={{ flex: 1, padding: 8 }}
-          />
+    <div className="appShell">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebarHeader">
+          <div className="brandDot" />
+          <div>
+            <div className="brandTitle">PDF Polish</div>
+            <div className="brandSub">Service Quote editor (v1)</div>
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input
-            placeholder="Status (optional)"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            style={{ flex: 1, padding: 8 }}
-          />
-          <button
-            onClick={() => refreshList().catch((e) => setErr(String(e)))}
-            style={{ padding: "8px 10px" }}
-          >
-            Refresh
-          </button>
+        <div className="searchBox">
+          <div className="row gap8">
+            <input
+              className="input"
+              placeholder="Status (optional)"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            />
+            <button className="btn btnGhost" onClick={() => refreshList().catch((e) => setErr(String(e)))}>
+              Refresh
+            </button>
+          </div>
+          <div className="mutedSmall">{items.length} documents</div>
         </div>
 
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-          {items.length} documents
-        </div>
+        <div className="docList">
+          {items.map((d) => {
+            const label = d.invoice_number || d.quote_number || d.job_report_number || d.id.slice(0, 8);
+            const isActive = d.id === selectedId;
+            const st = (d.status || "-").toUpperCase();
 
-        {items.map((d) => {
-          const label =
-            d.invoice_number || d.quote_number || d.job_report_number || d.id.slice(0, 8);
-          const isActive = d.id === selectedId;
-
-          return (
-            <div
-              key={d.id}
-              onClick={() => setSelectedId(d.id)}
-              style={{
-                padding: 10,
-                marginBottom: 8,
-                border: "1px solid #ddd",
-                borderRadius: 10,
-                cursor: "pointer",
-                background: isActive ? "#f3f6ff" : "white",
-              }}
-            >
-              <div style={{ fontWeight: 700 }}>
-                {d.doc_type || "UNKNOWN"} — {label}
-              </div>
-              <div style={{ fontSize: 12, color: "#444", marginTop: 4 }}>
-                Status: <b>{d.status || "-"}</b>
-              </div>
-              <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
-                {d.customer_name || d.property_address || ""}
-              </div>
-              {d.error ? (
-                <div style={{ fontSize: 12, color: "crimson", marginTop: 6 }}>
-                  {d.error}
+            return (
+              <button
+                key={d.id}
+                className={`docCard ${isActive ? "active" : ""}`}
+                onClick={() => setSelectedId(d.id)}
+              >
+                <div className="docTitle">
+                  <span className="pill">{d.doc_type || "UNKNOWN"}</span>
+                  <span className="docLabel">{label}</span>
                 </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+                <div className="docMeta">
+                  <span className={`statusDot ${st}`} />
+                  <span>Status: {st}</span>
+                </div>
+                <div className="docMeta muted">{d.customer_name || d.property_address || ""}</div>
+                {d.error ? <div className="docError">{d.error}</div> : null}
+              </button>
+            );
+          })}
+        </div>
+      </aside>
 
-      {/* Right: Viewer */}
-      <div style={{ flex: 1, padding: 12, overflow: "auto" }}>
+      {/* Main */}
+      <main className="main">
         {!selected ? (
-          <div style={{ color: "#666" }}>Select a document to preview.</div>
+          <div className="emptyState">Select a document to preview.</div>
         ) : (
           <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div className="topBar">
               <div>
-                <h2 style={{ margin: "0 0 6px 0" }}>
-                  {selected.doc_type || "UNKNOWN"} — {selected.id}
-                </h2>
-                <div style={{ color: "#666", fontSize: 13 }}>
+                <div className="pageTitle">
+                  {selected.doc_type || "UNKNOWN"} <span className="muted">—</span> {topLabel}
+                </div>
+                <div className="pageSub">
                   Status: <b>{selected.status || "-"}</b>
-                  {!selected.styled_draft_s3_key ? (
-                    <span style={{ marginLeft: 10, color: "#a36a00", fontWeight: 600 }}>
-                      Draft generating…
-                    </span>
-                  ) : null}
+                  {!selected.styled_draft_s3_key ? <span className="warnBadge">Draft generating…</span> : null}
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  disabled={loading || !selectedId}
-                  onClick={onRestyle}
-                  style={{ padding: "10px 12px" }}
-                >
-                  {loading ? "Restyling..." : "Restyle"}
+              <div className="row gap8">
+                <button className="btn btnPrimary" disabled={loading || !selectedId} onClick={onRestyle}>
+                  {loading ? "Working..." : "Restyle"}
                 </button>
+                {/* Save is inside editor */}
               </div>
             </div>
 
-            {msg ? (
-              <div style={{ marginTop: 10, color: "green", fontWeight: 600 }}>{msg}</div>
-            ) : null}
-            {err ? (
-              <div style={{ marginTop: 10, color: "crimson", whiteSpace: "pre-wrap" }}>{err}</div>
-            ) : null}
+            {msg ? <div className="alert ok">{msg}</div> : null}
+            {err ? <div className="alert err">{err}</div> : null}
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: 12,
-                marginTop: 14,
-              }}
-            >
-              <PreviewCard title="Original" url={originalUrl} reloadKey={reloadKey} />
-              <PreviewCard title="Draft" url={draftUrl} reloadKey={reloadKey} />
-              <PreviewCard title="Final" url={finalUrl} reloadKey={reloadKey} />
+            {/* Row 1: Original + Draft */}
+            <div className="grid2">
+              <div className="card">
+                <PreviewCard title="Original" url={originalUrl} reloadKey={reloadKey} />
+              </div>
+              <div className="card">
+                <PreviewCard title="Draft" url={draftUrl} reloadKey={reloadKey} />
+              </div>
             </div>
 
-            <div style={{ marginTop: 14, fontSize: 12, color: "#666" }}>
+            {/* Row 2: Editor + Final */}
+            <div className="grid2" style={{ marginTop: 12 }}>
+              <div className="card">
+                <div className="cardHeader">
+                  <div className="cardTitle">Editable Fields</div>
+                  <div className="mutedSmall">Service Quote</div>
+                </div>
+
+                {isServiceQuote ? (
+                  fields ? (
+                    <ServiceQuoteEditor
+                      value={fields}
+                      onChange={(v) => setFields(withComputedTotals(v))}
+                      onSave={onSaveFinal}
+                      saving={loading}
+                      canSave={!loading && !!selectedId && !!fields}
+                    />
+                  ) : (
+                    <div className="mutedSmall" style={{ padding: 12 }}>
+                      No editable fields yet. Click <b>Restyle</b> to generate draft + fields.
+                    </div>
+                  )
+                ) : (
+                  <div className="mutedSmall" style={{ padding: 12 }}>
+                    Editor not enabled for this document type yet (Service Quote only).
+                  </div>
+                )}
+              </div>
+
+              <div className="card">
+                <PreviewCard title="Final" url={finalUrl} reloadKey={reloadKey} />
+              </div>
+            </div>
+
+            <div className="mutedSmall" style={{ marginTop: 10 }}>
               Tip: if a PDF doesn’t load inside the embedded viewer, click “Open in new tab”.
             </div>
           </>
         )}
-      </div>
-    </div>
-  );
-}
-
-function PreviewCard({
-  title,
-  url,
-  reloadKey,
-}: {
-  title: string;
-  url: string | null;
-  reloadKey: number;
-}) {
-  return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontWeight: 800 }}>{title}</div>
-        {url ? (
-          <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
-            Open in new tab
-          </a>
-        ) : (
-          <span style={{ fontSize: 12, color: "#999" }}>Not available</span>
-        )}
-      </div>
-
-      <div
-        style={{
-          marginTop: 8,
-          height: 520,
-          borderRadius: 10,
-          overflow: "hidden",
-          border: "1px solid #eee",
-        }}
-      >
-        {url ? (
-          <iframe
-            key={`${title}-${reloadKey}`} // Only changes when URLs change (no blinking)
-            title={title}
-            src={url}
-            style={{ width: "100%", height: "100%", border: "0" }}
-          />
-        ) : (
-          <div style={{ padding: 12, color: "#999", fontSize: 13 }}>
-            No PDF yet. It will appear automatically once processing is done.
-          </div>
-        )}
-      </div>
+      </main>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 # app/api_main.py
-
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -12,10 +12,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.s3_storage import get_storage
-
+from app.services.document_fields import get_fields, set_final
 from app.services.keys import final_key
-from app.services.pdf_stamp import stamp_pdf
 from app.services.styling_service import ensure_draft
+from app.services.pdf_stamp import stamp_pdf
+
+# ✅ Service Quote editing + rendering
+from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
+from app.styling.service_quote.renderer import render_service_quote
 
 load_dotenv()
 
@@ -219,16 +223,15 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
         }
 
 
+# ------------------------------------------------------------
+# Existing: Stamp-based finalize (optional debug tool)
+# ------------------------------------------------------------
 @app.post("/api/documents/{doc_id}/finalize")
 def finalize_document(
     doc_id: str,
     body: dict = Body(default={"text": "This is final"}),
     force: bool = False,
 ):
-    """
-    Creates/overwrites FINAL by stamping text onto the DRAFT (preferred),
-    or ORIGINAL if no draft exists yet.
-    """
     stamp_text = (body.get("text") or "This is final").strip() or "This is final"
     storage = get_storage()
 
@@ -310,8 +313,119 @@ def finalize_document(
             db.commit()
             raise
 
+
+# ------------------------------------------------------------
+# Draft creation (restyle)
+# ------------------------------------------------------------
 @app.post("/api/documents/{doc_id}/restyle")
 def restyle_document(doc_id: str):
     with SessionLocal() as db:
         key = ensure_draft(db, doc_id, force=True)
         return {"ok": True, "styled_draft_s3_key": key}
+
+
+# ------------------------------------------------------------
+# Fields: editable JSON (draft/final)
+# ------------------------------------------------------------
+@app.get("/api/documents/{doc_id}/fields")
+def get_document_fields(doc_id: str):
+    with SessionLocal() as db:
+        row = get_fields(db, doc_id)
+        if not row:
+            # ensure draft exists (this will also store draft_json)
+            ensure_draft(db, doc_id, force=False)
+            row = get_fields(db, doc_id)
+
+        if not row:
+            raise HTTPException(status_code=404, detail="No fields available")
+
+        return {
+            "doc_id": doc_id,
+            "draft": row.get("draft_json"),
+            "final": row.get("final_json"),
+        }
+
+
+# ------------------------------------------------------------
+# ✅ NEW: Save Final from edited fields (Service Quote)
+# ------------------------------------------------------------
+@app.post("/api/documents/{doc_id}/save-final")
+def save_final(doc_id: str, body: dict = Body(...)):
+    """
+    body = { "fields": { ...ServiceQuoteData json... } }
+    - Normalizes totals (subtotal/tax/total) if blank
+    - Stores final_json
+    - Renders FINAL PDF and uploads to S3
+    - Updates documents.final_s3_key + status
+    """
+    fields = body.get("fields")
+    if not isinstance(fields, dict):
+        raise HTTPException(status_code=400, detail="Missing fields")
+
+    # ✅ compute subtotal/tax/total if user left blank
+    fields = normalize_service_quote_fields(fields)
+
+    storage = get_storage()
+
+    with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT id, original_s3_key FROM public.documents WHERE id=:id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        original_key = row["original_s3_key"]
+        if not original_key:
+            raise HTTPException(status_code=400, detail="Missing original_s3_key")
+
+        # mark FINALIZING
+        db.execute(
+            text("UPDATE public.documents SET status='FINALIZING', updated_at=now(), error=null WHERE id=:id"),
+            {"id": doc_id},
+        )
+        db.commit()
+
+        try:
+            # ✅ store final JSON
+            set_final(db, doc_id, fields)
+            db.commit()
+
+            # ✅ json -> ServiceQuoteData
+            data = json_to_service_quote(fields)
+
+            # ✅ render final pdf
+            template_path = Path(os.getenv("SERVICE_QUOTE_TEMPLATE_PDF") or "templates/Mainline-Service-Quote.pdf")
+            final_bytes = render_service_quote(template_path, data)
+
+            # ✅ upload + update
+            fk = final_key(original_key, doc_id)
+            storage.upload_pdf_bytes(fk, final_bytes)
+
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET final_s3_key=:k,
+                        status='FINALIZED',
+                        updated_at=now(),
+                        error=null
+                    WHERE id=:id
+                    """
+                ),
+                {"id": doc_id, "k": fk},
+            )
+            db.commit()
+
+            return {"ok": True, "final_s3_key": fk}
+
+        except Exception as e:
+            db.rollback()
+            db.execute(
+                text("UPDATE public.documents SET status='ERROR', updated_at=now(), error=:err WHERE id=:id"),
+                {"id": doc_id, "err": f"{type(e).__name__}: {e}"[:1000]},
+            )
+            db.commit()
+            raise
+    
