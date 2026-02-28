@@ -192,8 +192,6 @@ def main() -> None:
         data.quote_description = (
             "This is a sample quote description to help visually test wrapping and spacing. "
             "Add more words here to see how it breaks into lines."
-            "Add more words here to see how it breaks into lines."
-            "Add more words here to see how it breaks into lines."
         )
 
     # ✅ Now render using patched data
