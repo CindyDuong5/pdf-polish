@@ -21,6 +21,11 @@ from app.services.pdf_stamp import stamp_pdf
 from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
 from app.styling.service_quote.renderer import render_service_quote
 
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+from app.email.smtp_sender import send_email_brevo_smtp, EmailAttachment
+from app.email.template_router import email_kind_for, template_for_kind, render_html, build_subject
+
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -102,6 +107,9 @@ def list_documents(
           original_s3_key,
           styled_draft_s3_key,
           final_s3_key,
+          sent_to,
+          sent_cc,
+          sent_at,
           created_at,
           updated_at,
           error
@@ -357,6 +365,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
     - Stores final_json
     - Renders FINAL PDF and uploads to S3
     - Updates documents.final_s3_key + status
+    - ✅ Also copies client_email/client_name/property_address into documents table
     """
     fields = body.get("fields")
     if not isinstance(fields, dict):
@@ -392,6 +401,31 @@ def save_final(doc_id: str, body: dict = Body(...)):
             set_final(db, doc_id, fields)
             db.commit()
 
+            # ✅ ALSO store important fields on documents table (fixes "To" missing)
+            client_email = (fields.get("client_email") or "").strip() or None
+            client_name = (fields.get("client_name") or "").strip() or None
+            prop_addr = (fields.get("property_address") or "").strip() or None
+
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET customer_email = COALESCE(:customer_email, customer_email),
+                        customer_name = COALESCE(:customer_name, customer_name),
+                        property_address = COALESCE(:property_address, property_address),
+                        updated_at = now()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": doc_id,
+                    "customer_email": client_email,
+                    "customer_name": client_name,
+                    "property_address": prop_addr,
+                },
+            )
+            db.commit()
+
             # ✅ json -> ServiceQuoteData
             data = json_to_service_quote(fields)
 
@@ -418,7 +452,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
 
-            return {"ok": True, "final_s3_key": fk}
+            return {"ok": True, "final_s3_key": fk, "customer_email": client_email}
 
         except Exception as e:
             db.rollback()
@@ -428,4 +462,143 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
             raise
+        
+class SendQuoteEmailIn(BaseModel):
+    client_email: EmailStr
+    cc: Optional[List[EmailStr]] = None
     
+class SendEmailIn(BaseModel):
+    # optional override; if omitted, backend uses documents.customer_email
+    client_email: Optional[EmailStr] = None
+    cc: Optional[List[EmailStr]] = None
+
+
+@app.post("/api/documents/{doc_id}/send-email")
+def send_email_any(doc_id: str, body: SendEmailIn):
+    sql = text(
+        """
+        SELECT
+          id,
+          doc_type,
+          customer_name,
+          customer_email,
+          invoice_number,
+          quote_number,
+          job_report_number,
+          original_s3_key,
+          styled_draft_s3_key,
+          final_s3_key
+        FROM public.documents
+        WHERE id = :id
+        """
+    )
+
+    with SessionLocal() as db:
+        row = db.execute(sql, {"id": doc_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        to_email = str(body.client_email or row.get("customer_email") or "").strip()
+        if not to_email:
+            raise HTTPException(status_code=400, detail="No client email (customer_email is empty)")
+
+        storage = get_storage()
+
+        # choose best available file
+        key = row["final_s3_key"] or row["styled_draft_s3_key"] or row["original_s3_key"]
+        if not key:
+            raise HTTPException(status_code=400, detail="No PDF available to send")
+
+        label = row["invoice_number"] or row["quote_number"] or row["job_report_number"] or row["id"]
+        filename = f"{row['doc_type']}_{label}.pdf"
+
+        file_url = storage.presign_get_url(
+            key=key,
+            expires_seconds=7 * 24 * 3600,  # 7 days
+            download_filename=filename,
+            inline=True,
+        )
+
+        pdf_bytes = storage.download_bytes(key)
+
+        # ----------------------------
+        # ✅ Template routing by doc_type
+        # ----------------------------
+        customer_name = (row.get("customer_name") or "").strip()
+        greeting = f"Good day {customer_name}," if customer_name else "Good day,"
+
+        kind = email_kind_for(row.get("doc_type"))
+        template_name = template_for_kind(kind)
+
+        subject = build_subject(kind, row.get("doc_type"), str(label))
+
+        context = {
+            "greeting": greeting,
+            "customer_name": customer_name,
+            "doc_type": row.get("doc_type"),
+            "label": label,
+            "file_url": file_url,
+            "filename": filename,
+        }
+
+        html_body = render_html(template_name, context)
+
+        # simple plaintext fallback
+        text_body = (
+            f"{greeting}\n\n"
+            f"Please find the document attached.\n"
+            f"Link: {file_url}\n\n"
+            f"If you have any questions, reply to this email.\n"
+        )
+
+        cc_list = [str(x) for x in (body.cc or [])]
+
+        # 5) Send via Brevo SMTP
+        send_email_brevo_smtp(
+            to_email=to_email,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            cc_emails=cc_list,
+            attachments=[
+                EmailAttachment(
+                    filename=filename,
+                    content_type="application/pdf",
+                    data=pdf_bytes,
+                )
+            ],
+        )
+
+        # 6) Store sent metadata + mark SENT
+        sent_cc = ", ".join(cc_list) if cc_list else None
+
+        db.execute(
+            text(
+                """
+                UPDATE public.documents
+                SET sent_to = :sent_to,
+                    sent_cc = :sent_cc,
+                    sent_at = now(),
+                    status = 'SENT',
+                    updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id, "sent_to": to_email, "sent_cc": sent_cc},
+        )
+        db.commit()
+
+        sent_row = db.execute(
+            text("SELECT sent_at FROM public.documents WHERE id=:id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        return {
+            "ok": True,
+            "to": to_email,
+            "cc": cc_list,
+            "url": file_url,
+            "sent_at": sent_row["sent_at"] if sent_row else None,
+            "kind": kind,
+            "template": template_name,
+        }

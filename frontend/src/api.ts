@@ -42,3 +42,13 @@ export async function saveFinal(docId: string, fields: any) {
     body: JSON.stringify({ fields }),
   });
 }
+
+export async function sendEmail(docId: string, payload: { cc?: string[]; client_email?: string }) {
+  const res = await fetch(`${API_BASE}/api/documents/${docId}/send-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

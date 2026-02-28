@@ -50,3 +50,7 @@ class S3Client:
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=int(expires_seconds),
         )
+    
+    def download_pdf_bytes(self, key: str) -> bytes:
+        obj = self.s3.get_object(Bucket=self.bucket, Key=key)
+        return obj["Body"].read()

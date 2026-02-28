@@ -1,10 +1,11 @@
 // frontend/src/App.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getFields, getLinks, listDocuments, restyleDoc, saveFinal } from "./api";
+import { getFields, getLinks, listDocuments, restyleDoc, saveFinal, sendEmail } from "./api";
 import type { DocRow, Links, ServiceQuoteFields } from "./types";
 import PreviewCard from "./components/PreviewCard";
 import ServiceQuoteEditor from "./components/ServiceQuoteEditor";
 import "./styles.css";
+
 
 function emptySQ(): ServiceQuoteFields {
   return {
@@ -73,6 +74,16 @@ export default function App() {
   const [reloadKey, setReloadKey] = useState<number>(() => Date.now());
   const pollRef = useRef<number | null>(null);
 
+  const [ccInput, setCcInput] = useState("");
+  const [sending, setSending] = useState(false);
+
+  function parseCc(input: string): string[] {
+    return input
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   const selected = useMemo(
     () => items.find((x) => x.id === selectedId) || null,
     [items, selectedId]
@@ -106,6 +117,31 @@ export default function App() {
     const next = (data?.draft || data?.final || null) as ServiceQuoteFields | null;
     if (next) setFields(withComputedTotals(next));
     else setFields(null);
+  }
+
+  async function onSendEmail() {
+    if (!selectedId || !selected) return;
+
+    setSending(true);
+    setMsg(null);
+    setErr(null);
+
+    try {
+      const cc = parseCc(ccInput);
+
+      // send to selected.customer_email (backend default), with cc list
+      await sendEmail(selectedId, { cc, client_email: toEmail });
+
+      await refreshList();
+      await refreshLinks(selectedId);
+
+      setMsg("Email sent ✅");
+      setCcInput("");
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setSending(false);
+    }
   }
 
   // Initial load
@@ -209,6 +245,7 @@ export default function App() {
   const originalUrl = links?.original?.url || null;
   const draftUrl = links?.styled_draft?.url || null;
   const finalUrl = links?.final?.url || null;
+  const toEmail = selected?.customer_email || fields?.client_email || "";
 
   const topLabel =
     selected?.invoice_number ||
@@ -340,6 +377,53 @@ export default function App() {
 
               <div className="card">
                 <PreviewCard title="Final" url={finalUrl} reloadKey={reloadKey} />
+
+                {/* ✅ Send Email Section */}
+                <div style={{ padding: 12, borderTop: "1px solid #eee" }}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Send Email</div>
+
+                  <div className="mutedSmall" style={{ marginBottom: 10 }}>
+                    To: <b>{toEmail || "(missing client_email)"}</b>
+                    {selected.sent_at ? (
+                      <span style={{ marginLeft: 8 }}>
+                        — Sent ✅ <b>{new Date(selected.sent_at).toLocaleString()}</b>
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <label style={{ display: "block", marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>CC (comma or semicolon separated)</div>
+                    <input
+                      className="input"
+                      value={ccInput}
+                      onChange={(e) => setCcInput(e.target.value)}
+                      placeholder="cc1@email.com, cc2@email.com"
+                    />
+                  </label>
+
+                  <div className="row gap8">
+                    <button
+                      className="btn btnPrimary"
+                      onClick={onSendEmail}
+                      disabled={
+                        sending ||
+                        loading ||
+                        !selectedId ||
+                        !toEmail ||
+                        (!selected.final_s3_key && !selected.styled_draft_s3_key && !selected.original_s3_key)
+                      }
+                    >
+                      {sending ? "Sending..." : "📧 Send"}
+                    </button>
+
+                    {selected.sent_to ? (
+                      <div className="mutedSmall">
+                        Sent to: <b>{selected.sent_to}</b>
+                        {selected.sent_cc ? <span> | CC: {selected.sent_cc}</span> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
 

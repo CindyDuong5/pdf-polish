@@ -3,15 +3,26 @@ export type DocRow = {
   id: string;
   doc_type: string | null;
   status: string | null;
+
   customer_name: string | null;
+  customer_email: string | null;   // ✅ add (you already return it from backend)
   property_address: string | null;
+
   invoice_number: string | null;
   quote_number: string | null;
   job_report_number: string | null;
+
   created_at: string | null;
+
   original_s3_key: string | null;
   styled_draft_s3_key: string | null;
   final_s3_key: string | null;
+
+  // ✅ new "sent" metadata
+  sent_to: string | null;
+  sent_cc: string | null;
+  sent_at: string | null;
+
   error: string | null;
 };
 
