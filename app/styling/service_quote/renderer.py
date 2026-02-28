@@ -45,10 +45,10 @@ INFO_LINE_H = 11
 INFO_RULE_W = 0.9
 
 # Extra gap between info underline and title
-INFO_TO_TITLE_GAP = 0.36 * inch
+INFO_TO_TITLE_GAP = 0.55 * inch
 
 # Title + description
-TITLE_FS = 21
+TITLE_FS = 22
 DESC_FS = 9
 TITLE_GAP_BELOW = 0.16 * inch
 DESC_GAP_BELOW = 0.18 * inch
@@ -61,6 +61,9 @@ ITEM_BULLET_FS = 9
 ITEM_BULLET_LINE_H = 13
 ITEM_BLOCK_GAP = 0.16 * inch
 ITEM_BAR_COLOR = colors.HexColor("#EEE8E6")
+ITEM_LIST_GAP = 10  # space under bar AND space between item blocks
+ITEM_LIST_GAP_TOP = 14
+ITEM_LIST_GAP_BOTTOM = 0
 
 # ✅ Bullet dot bigger (drawn circle)
 BULLET_R = 1.9  # points
@@ -73,7 +76,7 @@ TOTAL_RULE_W = 0.8
 TOTAL_RULE_COLOR = colors.HexColor("#D9D1CE")
 TOTAL_ORANGE = colors.HexColor("#D35B3A")
 TOTAL_BAR_H = 0.36 * inch
-TOTAL_LABEL_PAD = 125  # ✅ labels closer to values
+TOTAL_LABEL_PAD = 85  # ✅ labels closer to values
 
 # Footer (every page)
 FOOTER_FS = 8
@@ -89,6 +92,7 @@ P2_TITLE_FS = 12
 P2_TEXT_FS = 11
 P2_LINE_H = 18
 
+RIGHT_PAD = 10 
 
 @dataclass
 class PageSpec:
@@ -493,14 +497,14 @@ def _draw_item_blocks_v2(
 
         if b.price:
             c.setFont(font_bold, ITEM_PRICE_FS)
-            c.drawRightString(x1 - 10, _vcenter_baseline(y, ITEM_BAR_H, ITEM_PRICE_FS), b.price)
+            c.drawRightString(x1 - RIGHT_PAD, _vcenter_baseline(y, ITEM_BAR_H, ITEM_PRICE_FS), b.price)
 
         # bullets start just under bar
-        y_b = (y - ITEM_BAR_H) - 10
+        y_b = (y - ITEM_BAR_H) - ITEM_LIST_GAP_TOP
 
         # ✅ bullets align vertically with consistent text start
-        bullet_x = x0 + 30
-        text_x = x0 + 44
+        bullet_x = x0 + 10
+        text_x = x0 + 28
         max_text_w = (x1 - text_x) - 10
 
         c.setFont(font_regular, ITEM_BULLET_FS)
@@ -528,7 +532,7 @@ def _draw_item_blocks_v2(
                 c.drawString(text_x, y_b, cont)
                 y_b -= ITEM_BULLET_LINE_H
 
-        y = y_b - ITEM_BLOCK_GAP
+        y = y_b - ITEM_LIST_GAP_BOTTOM
 
     return y
 
@@ -557,7 +561,7 @@ def _draw_totals_v2(
     c.setLineWidth(TOTAL_RULE_W)
     c.line(x0, y_top, x1, y_top)
 
-    value_x = x1
+    value_x = x1 - RIGHT_PAD
     label_x = x1 - TOTAL_LABEL_PAD
 
     y = y_top - 18
@@ -590,7 +594,8 @@ def _draw_totals_v2(
     c.setFillColor(colors.white)
     c.setFont(font_bold, TOTAL_LABEL_FS)
     c.drawRightString(label_x, y + 3, "Quote Total")
-    c.drawRightString(value_x - 2, y + 3, total)
+    c.drawRightString(value_x, y + 3, total)
+    c.drawRightString(value_x - 0.35, y + 3, total)
 
     c.setFillColor(colors.black)
     c.setStrokeColor(colors.black)
@@ -608,27 +613,28 @@ def _draw_included_exclusions_page_v2(
     font_regular: str,
     font_bold: str,
 ) -> None:
-    """
-    ✅ Bigger blank header space
-    ✅ Headings less bold (use regular font)
-    ✅ Content aligned vertically like V2
-    """
     x0 = _x0()
     x1 = _x1(ps)
     y = y_top
 
-    # headings: less bold (regular)
+    # ✅ Bullet geometry aligned with headings
+    bullet_x = x0 + 2              # dot aligns with heading start
+    text_x = x0 + 18           # text indented from dot
+    max_w = (x1 - text_x) - 10
+
+    # Heading 1
     c.setFillColor(colors.black)
     c.setFont(font_regular, P2_TITLE_FS)
     c.drawString(x0, y, "Included in Quote")
     y -= P2_LINE_H
 
-    # bullet item
+    # Bullet item
     c.setFont(font_regular, P2_TEXT_FS)
-    c.circle(x0 + 20, y + 4, BULLET_R, stroke=0, fill=1)
-    c.drawString(x0 + 34, y, "All Parts & Labor")
+    c.circle(bullet_x, y + 4, BULLET_R, stroke=0, fill=1)
+    c.drawString(text_x, y, "All Parts & Labor")
     y -= (P2_LINE_H + 10)
 
+    # Heading 2
     c.setFont(font_regular, P2_TITLE_FS)
     c.drawString(x0, y, "Specific Exclusions")
     y -= P2_LINE_H
@@ -639,22 +645,20 @@ def _draw_included_exclusions_page_v2(
         "Pricing is subject to parts availability and all items being done concurrently",
     ]
 
-    text_x = x0 + 34
-    max_w = (x1 - text_x) - 10
-
     for ex in exclusions:
         lines = _wrap_text(ex, font_regular, P2_TEXT_FS, max_w)
         if not lines:
             continue
 
-        c.circle(x0 + 20, y + 4, BULLET_R, stroke=0, fill=1)
+        # first line with bullet
+        c.circle(bullet_x, y + 4, BULLET_R, stroke=0, fill=1)
         c.drawString(text_x, y, lines[0])
         y -= P2_LINE_H
 
+        # continuation lines (no bullet)
         for cont in lines[1:]:
             c.drawString(text_x, y, cont)
             y -= P2_LINE_H
-
 
 # =========================
 # Main render

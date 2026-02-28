@@ -17,7 +17,7 @@ def _json_default(o):
 
 
 def main() -> None:
-    pdf_path = Path("sample_inputs/Quote_1015_Annual_Repair_Quote_for_Cindy_.pdf")
+    pdf_path = Path("sample_inputs/Quote_1017_Cindy_Annual_Inspection.pdf")
     pdf_bytes = pdf_path.read_bytes()
 
     data = parse_service_quote(pdf_bytes)

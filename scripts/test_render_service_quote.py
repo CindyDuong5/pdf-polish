@@ -7,6 +7,7 @@ from typing import Dict, Optional
 from pypdf import PdfReader
 
 from app.styling.service_quote.styler import ServiceQuoteStyler
+from app.styling.service_quote.renderer import render_service_quote
 
 
 def _guess_template_path() -> Path:
@@ -21,7 +22,7 @@ def _guess_template_path() -> Path:
 
 
 def _guess_original_path() -> Path:
-    p1 = Path("sample_inputs/Quote_1015_Annual_Repair_Quote_for_Cindy_.pdf")
+    p1 = Path("sample_inputs/Quote_1017_Cindy_Annual_Inspection.pdf")
     if p1.exists():
         return p1
 
@@ -149,15 +150,9 @@ def main() -> None:
     original_path = _guess_original_path()
 
     if not template_path.exists():
-        raise FileNotFoundError(
-            f"Template not found.\nTried: {template_path.resolve()}\n"
-            "Put your template at templates/Mainline-Service-Quote.pdf."
-        )
+        raise FileNotFoundError(f"Template not found: {template_path.resolve()}")
     if not original_path.exists():
-        raise FileNotFoundError(
-            f"Original PDF not found.\nTried: {original_path.resolve()}\n"
-            "Put your input PDF in sample_inputs/."
-        )
+        raise FileNotFoundError(f"Original PDF not found: {original_path.resolve()}")
 
     print("Template :", template_path.resolve())
     print("Original :", original_path.resolve())
@@ -165,7 +160,44 @@ def main() -> None:
     original_bytes = original_path.read_bytes()
 
     styler = ServiceQuoteStyler(template_pdf=template_path)
-    out_bytes, data = styler.style(original_bytes)
+
+    # ✅ Use your parser output, but DO NOT use the rendered PDF from styler.style()
+    _out_bytes_unused, data = styler.style(original_bytes)
+
+    # ----------------------------
+    # ✅ Patch missing fields here
+    # ----------------------------
+    if not (data.client_name or "").strip():
+        data.client_name = "Client Name"
+
+    if not (data.client_phone or "").strip():
+        data.client_phone = "000-000-0000"
+
+    if not (data.client_email or "").strip():
+        data.client_email = "name@email.com"
+
+    if not (data.company_name or "").strip():
+        data.company_name = "Company Name"
+
+    if not (data.company_address or "").strip():
+        data.company_address = "Address\nCity, Province XXX XXX"
+
+    if not (data.property_name or "").strip():
+        data.property_name = "Property Name"
+
+    if not (data.property_address or "").strip():
+        data.property_address = "Address\nCity, Province XXX XXX"
+
+    if not (data.quote_description or "").strip():
+        data.quote_description = (
+            "This is a sample quote description to help visually test wrapping and spacing. "
+            "Add more words here to see how it breaks into lines."
+            "Add more words here to see how it breaks into lines."
+            "Add more words here to see how it breaks into lines."
+        )
+
+    # ✅ Now render using patched data
+    out_bytes = render_service_quote(template_path, data)
 
     out_path = Path("tmp/service_quote_draft.pdf")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +205,7 @@ def main() -> None:
 
     print("\n✅ Draft created:", out_path.resolve())
 
-    print("\n--- Extracted data (parser output) ---")
+    print("\n--- Extracted + patched data (used for render) ---")
     print("client_name      :", data.client_name)
     print("client_phone     :", data.client_phone)
     print("client_email     :", data.client_email)
@@ -183,25 +215,12 @@ def main() -> None:
     print("property_address :", data.property_address)
     print("quote_number     :", data.quote_number)
     print("quote_date       :", data.quote_date)
+    print("quote_description:", (data.quote_description or "")[:140], "...")
     print("subtotal         :", data.subtotal)
     print("tax              :", data.tax)
     print("total            :", data.total)
-    print("items count      :", len(data.items))
-    if data.items:
-        print("first item name  :", data.items[0].name)
-        print("first item price :", data.items[0].price)
-        print("first item desc  :", (data.items[0].description or "")[:140], "...")
 
-    # ✅ Robust readback (won't crash like get_fields())
     _print_fields_from_annots(out_path)
-
-    print(
-        "\nNext step:\n"
-        f"1) Open the PDF: {out_path}\n"
-        "2) Confirm visually the text lands in the right template boxes.\n"
-        "   (Mac Preview can hide appearances; try Chrome or Acrobat if needed.)\n"
-    )
-
 
 if __name__ == "__main__":
     main()
