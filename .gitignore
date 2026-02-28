@@ -39,3 +39,28 @@ pdf-polish-worker-sa.json
 sample_inputs/*.pdf
 out/*.pdf
 *.log
+
+# Generated PDFs
+*.pdf
+
+# Temporary files
+tmp/
+
+# Logos / images
+*.png
+*.jpg
+*.jpeg
+
+# Fonts
+*.otf
+*.ttf
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Virtual env
+.venv/
