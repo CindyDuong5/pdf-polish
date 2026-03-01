@@ -113,6 +113,10 @@ def list_documents(
           sent_at,
           created_at,
           updated_at,
+          quote_po_number,
+          quote_note,
+          quote_reject_reason,
+          quote_responded_at,
           error
         FROM public.documents
         {where_sql}
@@ -603,3 +607,87 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "kind": kind,
             "template": template_name,
         }
+    
+# --- Review actions: Accept / Reject (human approval) -----------------
+
+class AcceptIn(BaseModel):
+    # optional fields you already have in documents table
+    quote_po_number: Optional[str] = None
+    quote_note: Optional[str] = None
+    # If true, auto-send email after accept (optional)
+    send_email: bool = False
+    cc: Optional[List[EmailStr]] = None
+
+
+class RejectIn(BaseModel):
+    reason: Optional[str] = None
+
+
+@app.post("/api/documents/{doc_id}/accept")
+def accept_document(doc_id: str, body: AcceptIn):
+    with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT id, status FROM public.documents WHERE id=:id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if row["status"] != "READY_FOR_REVIEW":
+            raise HTTPException(status_code=409, detail=f"Cannot accept when status={row['status']}")
+
+        db.execute(
+            text(
+                """
+                UPDATE public.documents
+                SET status='APPROVED',
+                    quote_po_number = COALESCE(:po, quote_po_number),
+                    quote_note = COALESCE(:note, quote_note),
+                    quote_reject_reason = NULL,
+                    quote_responded_at = now(),
+                    updated_at=now(),
+                    error=NULL
+                WHERE id=:id
+                """
+            ),
+            {"id": doc_id, "po": body.quote_po_number, "note": body.quote_note},
+        )
+        db.commit()
+
+    if body.send_email:
+        return send_email_any(doc_id, SendEmailIn(client_email=None, cc=body.cc))
+
+    return {"ok": True, "id": doc_id, "status": "APPROVED"}
+
+@app.post("/api/documents/{doc_id}/reject")
+def reject_document(doc_id: str, body: RejectIn):
+    with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT id, status FROM public.documents WHERE id=:id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if row["status"] != "READY_FOR_REVIEW":
+            raise HTTPException(status_code=409, detail=f"Cannot reject when status={row['status']}")
+
+        db.execute(
+            text(
+                """
+                UPDATE public.documents
+                SET status='REJECTED',
+                    quote_reject_reason = :reason,
+                    quote_responded_at = now(),
+                    updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {"id": doc_id, "reason": (body.reason or "").strip() or None},
+        )
+        db.commit()
+
+    return {"ok": True, "id": doc_id, "status": "REJECTED"}
+  
