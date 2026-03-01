@@ -1,0 +1,11 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f"
+      - "Dockerfile.api"
+      - "-t"
+      - "gcr.io/$PROJECT_ID/pdf-polish-api"
+      - "."
+images:
+  - "gcr.io/$PROJECT_ID/pdf-polish-api"

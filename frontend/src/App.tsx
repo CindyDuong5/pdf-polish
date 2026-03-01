@@ -6,26 +6,6 @@ import PreviewCard from "./components/PreviewCard";
 import ServiceQuoteEditor from "./components/ServiceQuoteEditor";
 import "./styles.css";
 
-
-function emptySQ(): ServiceQuoteFields {
-  return {
-    client_name: "",
-    client_phone: "",
-    client_email: "",
-    company_name: "",
-    company_address: "",
-    property_name: "",
-    property_address: "",
-    quote_number: "",
-    quote_date: "",
-    quote_description: "",
-    items: [],
-    subtotal: "",
-    tax: "",
-    total: "",
-  };
-}
-
 // Ontario HST default
 const DEFAULT_TAX_RATE = 0.13;
 

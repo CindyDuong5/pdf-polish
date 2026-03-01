@@ -1,5 +1,6 @@
 // frontend/src/api.ts
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL || "https://pdf-polish-api-722522316664.northamerica-northeast1.run.app";
 
 async function httpJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);

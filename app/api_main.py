@@ -43,6 +43,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://pdf-polish-frontend-722522316664.northamerica-northeast1.run.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -462,7 +463,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
             raise
-        
+
 class SendQuoteEmailIn(BaseModel):
     client_email: EmailStr
     cc: Optional[List[EmailStr]] = None
