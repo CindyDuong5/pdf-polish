@@ -16,7 +16,7 @@ class QuoteResponseClaims(TypedDict):
     iat: int
 
 JWT_ALG = "HS256"
-DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 14  # 14 days
+DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 
 def _get_secret() -> str:
@@ -26,16 +26,25 @@ def _get_secret() -> str:
     return secret
 
 
-def make_token(doc_id: str, action: Action, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> str:
+def make_token(
+    doc_id: str,
+    action: Action,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    extra_claims: dict | None = None,
+) -> str:
     now = int(time.time())
-    payload: QuoteResponseClaims = {
+
+    payload: dict = {
         "doc_id": doc_id,
         "action": action,
         "iat": now,
         "exp": now + ttl_seconds,
     }
-    return jwt.encode(payload, _get_secret(), algorithm=JWT_ALG)
 
+    if extra_claims:
+        payload.update(extra_claims)
+
+    return jwt.encode(payload, _get_secret(), algorithm=JWT_ALG)
 
 def verify_token(token: str) -> QuoteResponseClaims:
     return jwt.decode(token, _get_secret(), algorithms=[JWT_ALG])

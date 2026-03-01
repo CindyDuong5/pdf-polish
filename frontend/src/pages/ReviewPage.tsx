@@ -1,9 +1,10 @@
 // frontend/src/pages/ReviewPage.tsx
-import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { acceptQuote, rejectQuote } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { acceptQuote, rejectQuote, getQuoteDecision } from "../api";
 
 type Action = "accept" | "reject";
+type DecisionStatus = "PENDING" | "APPROVED" | "REJECTED" | null;
 
 function decodeJwtPayload(token: string): any | null {
   try {
@@ -17,70 +18,156 @@ function decodeJwtPayload(token: string): any | null {
   }
 }
 
+function errMsg(e: any): string {
+  return e?.detail || e?.message || String(e);
+}
+
 export default function ReviewPage() {
   const [sp] = useSearchParams();
   const token = sp.get("token") || "";
 
   const claims = useMemo(() => decodeJwtPayload(token), [token]);
-  const docId = (claims?.doc_id as string) || "";
+
+  const docId = claims?.doc_id || "";
   const action = (claims?.action as Action) || "";
+  const quoteNumber = (claims?.quote_number || docId.slice(0, 8) || "").toString();
 
   const [po, setPo] = useState("");
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(false);
+
   const [ok, setOk] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // If already decided (or after user submits), lock page
+  const [done, setDone] = useState(false);
+
+  // Backend returns APPROVED / REJECTED (not ACCEPTED)
+  const [decision, setDecision] = useState<DecisionStatus>(null);
+
   const valid = !!token && !!docId && (action === "accept" || action === "reject");
+  const isFinal = decision === "APPROVED" || decision === "REJECTED";
+
+  // On load: check whether quote is already decided
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (!valid) return;
+
+      setChecking(true);
+      setErr(null);
+      setOk(null);
+
+      try {
+        const res: any = await getQuoteDecision(docId, token);
+        if (cancelled) return;
+
+        const status = String(res?.status || "PENDING").toUpperCase();
+
+        if (status === "APPROVED" || status === "REJECTED") {
+          setDecision(status as DecisionStatus);
+          setDone(true);
+
+          // Optional: if backend returns stored values, prefill (not shown, but harmless)
+          if (status === "APPROVED") {
+            setPo(res?.quote_po_number || "");
+            setNote(res?.quote_note || "");
+          } else {
+            setReason(res?.reject_reason || res?.reason || "");
+          }
+
+          setOk(
+            status === "APPROVED"
+              ? "Quote is already approved. Contact support@mainlinefire.com if you need help."
+              : "Quote is already rejected. Contact support@mainlinefire.com if you need help."
+          );
+        } else {
+          setDecision("PENDING");
+        }
+      } catch (e: any) {
+        if (!cancelled) setErr(errMsg(e));
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [valid, docId, token]);
 
   async function onConfirm() {
     setErr(null);
     setOk(null);
-    if (!valid) return setErr("Invalid or missing token.");
+    if (!valid) return setErr("This link is invalid or expired.");
+    if (isFinal) {
+      return setOk(
+        decision === "APPROVED"
+          ? "Quote is already approved. Contact support@mainlinefire.com if you need help."
+          : "Quote is already rejected. Contact support@mainlinefire.com if you need help."
+      );
+    }
 
     setLoading(true);
     try {
       if (action === "accept") {
-        await acceptQuote(docId, {
+        const res: any = await acceptQuote(docId, {
           token,
           quote_po_number: po.trim() || null,
           quote_note: note.trim() || null,
         });
-        setOk("Approved ✅ Thank you! Our team has been notified.");
+
+        const msg = res?.message || "Approved ✔ Our team has been notified.";
+        setOk(msg);
+
+        // Lock UI after submit
+        setDecision("APPROVED");
+        setDone(true);
       } else {
-        await rejectQuote(docId, { token, reason: reason.trim() || null });
-        setOk("Rejected ✅ Thank you! Our team has been notified.");
+        const res: any = await rejectQuote(docId, { token, reason: reason.trim() || null });
+
+        const msg = res?.message || "Rejected ✔ Our team has been notified.";
+        setOk(msg);
+
+        // Lock UI after submit
+        setDecision("REJECTED");
+        setDone(true);
       }
     } catch (e: any) {
-      setErr(e?.message || String(e));
+      setErr(errMsg(e));
     } finally {
       setLoading(false);
     }
   }
 
-  return (
-    <div style={{ maxWidth: 720, margin: "40px auto", padding: 16 }}>
-      <div style={{ marginBottom: 12 }}>
-        <Link to="/" className="link">
-          ← Back to PDF Polish
-        </Link>
-      </div>
+  const actionLabel = action === "accept" ? "Approve Quote" : "Reject Quote";
+  const badgeColor = action === "accept" ? "#16a34a" : "#dc2626";
 
-      <div className="card">
-        <div className="cardHeader">
-          <div>
-            <div className="cardTitle">Quote Confirmation</div>
-            <div className="mutedSmall">
-              {docId ? (
-                <>
-                  Doc: <b>{docId.slice(0, 8)}</b> — Action: <b>{action}</b>
-                </>
-              ) : (
-                "Invalid link"
-              )}
-            </div>
+  return (
+    <div style={{ maxWidth: 720, margin: "60px auto", padding: 20 }}>
+      <div className="card" style={{ padding: 28 }}>
+        {/* Header */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 24, fontWeight: 800 }}>{actionLabel}</div>
+
+          <div style={{ marginTop: 6, fontSize: 14 }}>
+            Quote #
+            <span
+              style={{
+                marginLeft: 6,
+                padding: "4px 10px",
+                borderRadius: 20,
+                background: "#f3f4f6",
+                fontWeight: 700,
+              }}
+            >
+              {quoteNumber || "—"}
+            </span>
           </div>
         </div>
 
@@ -88,65 +175,98 @@ export default function ReviewPage() {
           <div className="alert err">This link is invalid or expired.</div>
         ) : (
           <>
-            {action === "accept" ? (
+            {checking && <div className="alert">Checking quote status...</div>}
+
+            {/* If already decided: show message only, no inputs/buttons */}
+            {isFinal ? (
               <>
-                <div style={{ fontWeight: 800, marginBottom: 8 }}>Approve</div>
-
-                <label style={{ display: "block", marginBottom: 10 }}>
-                  <div className="mutedSmall" style={{ marginBottom: 4 }}>
-                    PO Number (optional)
-                  </div>
-                  <input className="input" value={po} onChange={(e) => setPo(e.target.value)} placeholder="PO Number" />
-                </label>
-
-                <label style={{ display: "block", marginBottom: 10 }}>
-                  <div className="mutedSmall" style={{ marginBottom: 4 }}>
-                    Notes (optional)
-                  </div>
-                  <textarea
-                    className="input"
-                    style={{ minHeight: 120 }}
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    placeholder="Any notes for our team..."
-                  />
-                </label>
+                {err && <div className="alert err">{err}</div>}
+                {ok && <div className="alert ok">{ok}</div>}
               </>
             ) : (
               <>
-                <div style={{ fontWeight: 800, marginBottom: 8 }}>Reject</div>
+                {/* Form (only when pending) */}
+                {action === "accept" ? (
+                  <>
+                    <label style={{ display: "block", marginBottom: 14 }}>
+                      <div className="mutedSmall" style={{ marginBottom: 6 }}>
+                        PO Number (optional)
+                      </div>
+                      <input
+                        className="input"
+                        value={po}
+                        disabled={done || loading || checking}
+                        onChange={(e) => setPo(e.target.value)}
+                        placeholder="Enter PO Number"
+                      />
+                    </label>
 
-                <label style={{ display: "block", marginBottom: 10 }}>
-                  <div className="mutedSmall" style={{ marginBottom: 4 }}>
-                    Reason (required)
-                  </div>
-                  <textarea
-                    className="input"
-                    style={{ minHeight: 140 }}
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    placeholder="Please tell us why you’re rejecting this quote..."
-                  />
-                </label>
+                    <label style={{ display: "block", marginBottom: 14 }}>
+                      <div className="mutedSmall" style={{ marginBottom: 6 }}>
+                        Notes (optional)
+                      </div>
+                      <textarea
+                        className="input"
+                        style={{ minHeight: 120 }}
+                        value={note}
+                        disabled={done || loading || checking}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder="Any notes for our team..."
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <label style={{ display: "block", marginBottom: 14 }}>
+                    <div className="mutedSmall" style={{ marginBottom: 6 }}>
+                      Reason for rejection
+                    </div>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 140 }}
+                      value={reason}
+                      disabled={done || loading || checking}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="Please tell us why you're rejecting this quote..."
+                    />
+                  </label>
+                )}
+
+                {err && <div className="alert err">{err}</div>}
+                {ok && <div className="alert ok">{ok}</div>}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+                  <button
+                    disabled={
+                      done ||
+                      loading ||
+                      checking ||
+                      (action === "reject" && !reason.trim())
+                    }
+                    onClick={onConfirm}
+                    style={{
+                      background: badgeColor,
+                      color: "#fff",
+                      border: "none",
+                      padding: "12px 24px",
+                      borderRadius: 10,
+                      fontWeight: 700,
+                      cursor: done ? "default" : "pointer",
+                      opacity: done || loading || checking ? 0.7 : 1,
+                    }}
+                  >
+                    {loading
+                      ? "Submitting..."
+                      : action === "accept"
+                        ? "Confirm Approval"
+                        : "Confirm Rejection"}
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 16, fontSize: 13, color: "#6b7280" }}>
+                  This will update the quote status and notify support@mainlinefire.com.
+                </div>
               </>
             )}
-
-            {err ? <div className="alert err">{err}</div> : null}
-            {ok ? <div className="alert ok">{ok}</div> : null}
-
-            <div className="row gap8" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-              <button
-                className="btn btnPrimary"
-                disabled={loading || (action === "reject" && !reason.trim())}
-                onClick={onConfirm}
-              >
-                {loading ? "Submitting..." : "Confirm"}
-              </button>
-            </div>
-
-            <div className="mutedSmall" style={{ marginTop: 10 }}>
-              This will update the quote status and notify support@mainlinefire.com.
-            </div>
           </>
         )}
       </div>

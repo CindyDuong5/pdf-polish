@@ -4,8 +4,14 @@ const API_BASE =
 
 async function httpJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const text = await res.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) {
+    // prefer FastAPI detail if present
+    throw new Error(data?.detail || text || res.statusText);
+  }
+  return data;
 }
 
 export async function listDocuments(params: {
@@ -71,4 +77,9 @@ export async function rejectQuote(docId: string, payload: { token: string; reaso
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+export async function getQuoteDecision(docId: string, token: string) {
+  const qs = new URLSearchParams({ token }).toString();
+  return httpJson(`${API_BASE}/api/documents/${docId}/quote-decision?${qs}`);
 }
