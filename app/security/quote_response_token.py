@@ -15,9 +15,16 @@ class QuoteResponseClaims(TypedDict):
     exp: int
     iat: int
 
-JWT_SECRET = os.environ["QUOTE_RESPONSE_JWT_SECRET"]  # set this in Cloud Run
 JWT_ALG = "HS256"
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 14  # 14 days
+
+
+def _get_secret() -> str:
+    secret = os.getenv("QUOTE_RESPONSE_JWT_SECRET")
+    if not secret:
+        raise RuntimeError("Missing QUOTE_RESPONSE_JWT_SECRET")
+    return secret
+
 
 def make_token(doc_id: str, action: Action, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> str:
     now = int(time.time())
@@ -27,7 +34,8 @@ def make_token(doc_id: str, action: Action, ttl_seconds: int = DEFAULT_TTL_SECON
         "iat": now,
         "exp": now + ttl_seconds,
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    return jwt.encode(payload, _get_secret(), algorithm=JWT_ALG)
+
 
 def verify_token(token: str) -> QuoteResponseClaims:
-    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])  # raises if invalid/expired
+    return jwt.decode(token, _get_secret(), algorithms=[JWT_ALG])

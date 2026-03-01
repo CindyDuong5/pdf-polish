@@ -1,11 +1,37 @@
 steps:
+  # 1) Build with a unique tag that always exists
   - name: "gcr.io/cloud-builders/docker"
     args:
-      - "build"
-      - "-f"
-      - "Dockerfile.api"
-      - "-t"
-      - "gcr.io/$PROJECT_ID/pdf-polish-api"
-      - "."
+      [
+        "build",
+        "-f",
+        "Dockerfile.api",
+        "-t",
+        "gcr.io/$PROJECT_ID/pdf-polish-api:$BUILD_ID",
+        "."
+      ]
+
+  # 2) Push
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/$PROJECT_ID/pdf-polish-api:$BUILD_ID"]
+
+  # 3) Deploy to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      [
+        "run",
+        "deploy",
+        "pdf-polish-api",
+        "--image",
+        "gcr.io/$PROJECT_ID/pdf-polish-api:$BUILD_ID",
+        "--region",
+        "northamerica-northeast1",
+        "--platform",
+        "managed",
+        "--allow-unauthenticated",
+        "--quiet"
+      ]
+
 images:
-  - "gcr.io/$PROJECT_ID/pdf-polish-api"
+  - "gcr.io/$PROJECT_ID/pdf-polish-api:$BUILD_ID"

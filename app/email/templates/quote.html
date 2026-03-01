@@ -6,7 +6,27 @@
 
     <p><a href="{{ file_url }}">{{ file_url }}</a></p>
 
-    <p>If you would like to proceed, please reply to this email.</p>
+    {% if reviewable %}
+      <p style="margin-top:16px;">Please confirm how you would like to proceed:</p>
+
+      <p>
+        <a href="{{ approve_url }}"
+           style="display:inline-block;padding:12px 18px;border-radius:8px;text-decoration:none;background:#16a34a;color:#fff;font-weight:700;">
+          Approve
+        </a>
+
+        <a href="{{ reject_url }}"
+           style="display:inline-block;padding:12px 18px;border-radius:8px;text-decoration:none;background:#dc2626;color:#fff;font-weight:700;margin-left:10px;">
+          Reject
+        </a>
+      </p>
+
+      <p style="color:#666;font-size:12px;margin-top:10px;">
+        Clicking Approve/Reject will open a confirmation page to enter PO/Notes or a Reject Reason.
+      </p>
+    {% else %}
+      <p>If you would like to proceed, please reply to this email.</p>
+    {% endif %}
 
     <p>Thank you,<br/>Mainline Fire Protection</p>
   </body>

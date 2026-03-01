@@ -3,29 +3,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from app.storage.s3_storage import get_storage
+from app.email.smtp_sender import EmailAttachment, send_email_brevo_smtp
+from app.email.template_router import build_subject, email_kind_for, render_html, template_for_kind
+from app.security.quote_response_token import make_token, verify_token  # ✅ use your existing JWT
 from app.services.document_fields import get_fields, set_final
 from app.services.keys import final_key
-from app.services.styling_service import ensure_draft
 from app.services.pdf_stamp import stamp_pdf
-
-# ✅ Service Quote editing + rendering
+from app.services.styling_service import ensure_draft
 from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
+from app.storage.s3_storage import get_storage
 from app.styling.service_quote.renderer import render_service_quote
 
-from pydantic import BaseModel, EmailStr
-from typing import List, Optional
-from app.email.smtp_sender import send_email_brevo_smtp, EmailAttachment
-from app.email.template_router import email_kind_for, template_for_kind, render_html, build_subject
-
+print("LOADED api_main.py FROM:", __file__)
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -345,7 +343,6 @@ def get_document_fields(doc_id: str):
     with SessionLocal() as db:
         row = get_fields(db, doc_id)
         if not row:
-            # ensure draft exists (this will also store draft_json)
             ensure_draft(db, doc_id, force=False)
             row = get_fields(db, doc_id)
 
@@ -360,25 +357,15 @@ def get_document_fields(doc_id: str):
 
 
 # ------------------------------------------------------------
-# ✅ NEW: Save Final from edited fields (Service Quote)
+# ✅ Save Final from edited fields (Service Quote)
 # ------------------------------------------------------------
 @app.post("/api/documents/{doc_id}/save-final")
 def save_final(doc_id: str, body: dict = Body(...)):
-    """
-    body = { "fields": { ...ServiceQuoteData json... } }
-    - Normalizes totals (subtotal/tax/total) if blank
-    - Stores final_json
-    - Renders FINAL PDF and uploads to S3
-    - Updates documents.final_s3_key + status
-    - ✅ Also copies client_email/client_name/property_address into documents table
-    """
     fields = body.get("fields")
     if not isinstance(fields, dict):
         raise HTTPException(status_code=400, detail="Missing fields")
 
-    # ✅ compute subtotal/tax/total if user left blank
     fields = normalize_service_quote_fields(fields)
-
     storage = get_storage()
 
     with SessionLocal() as db:
@@ -394,7 +381,6 @@ def save_final(doc_id: str, body: dict = Body(...)):
         if not original_key:
             raise HTTPException(status_code=400, detail="Missing original_s3_key")
 
-        # mark FINALIZING
         db.execute(
             text("UPDATE public.documents SET status='FINALIZING', updated_at=now(), error=null WHERE id=:id"),
             {"id": doc_id},
@@ -402,11 +388,9 @@ def save_final(doc_id: str, body: dict = Body(...)):
         db.commit()
 
         try:
-            # ✅ store final JSON
             set_final(db, doc_id, fields)
             db.commit()
 
-            # ✅ ALSO store important fields on documents table (fixes "To" missing)
             client_email = (fields.get("client_email") or "").strip() or None
             client_name = (fields.get("client_name") or "").strip() or None
             prop_addr = (fields.get("property_address") or "").strip() or None
@@ -431,14 +415,10 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
 
-            # ✅ json -> ServiceQuoteData
             data = json_to_service_quote(fields)
-
-            # ✅ render final pdf
             template_path = Path(os.getenv("SERVICE_QUOTE_TEMPLATE_PDF") or "templates/Mainline-Service-Quote.pdf")
             final_bytes = render_service_quote(template_path, data)
 
-            # ✅ upload + update
             fk = final_key(original_key, doc_id)
             storage.upload_pdf_bytes(fk, final_bytes)
 
@@ -468,14 +448,19 @@ def save_final(doc_id: str, body: dict = Body(...)):
             db.commit()
             raise
 
-class SendQuoteEmailIn(BaseModel):
-    client_email: EmailStr
-    cc: Optional[List[EmailStr]] = None
-    
+
 class SendEmailIn(BaseModel):
-    # optional override; if omitted, backend uses documents.customer_email
     client_email: Optional[EmailStr] = None
     cc: Optional[List[EmailStr]] = None
+
+
+def _is_reviewable_quote(doc_type: str) -> bool:
+    """
+    Only Service Quote + Project Quote get Approve/Reject buttons.
+    Adjust these checks to match your exact doc_type values.
+    """
+    dt = (doc_type or "").upper()
+    return ("SERVICE_QUOTE" in dt) or ("PROJECT_QUOTE" in dt)
 
 
 @app.post("/api/documents/{doc_id}/send-email")
@@ -509,7 +494,6 @@ def send_email_any(doc_id: str, body: SendEmailIn):
 
         storage = get_storage()
 
-        # choose best available file
         key = row["final_s3_key"] or row["styled_draft_s3_key"] or row["original_s3_key"]
         if not key:
             raise HTTPException(status_code=400, detail="No PDF available to send")
@@ -519,23 +503,53 @@ def send_email_any(doc_id: str, body: SendEmailIn):
 
         file_url = storage.presign_get_url(
             key=key,
-            expires_seconds=7 * 24 * 3600,  # 7 days
+            expires_seconds=7 * 24 * 3600,
             download_filename=filename,
             inline=True,
         )
 
         pdf_bytes = storage.download_bytes(key)
 
-        # ----------------------------
-        # ✅ Template routing by doc_type
-        # ----------------------------
         customer_name = (row.get("customer_name") or "").strip()
         greeting = f"Good day {customer_name}," if customer_name else "Good day,"
 
         kind = email_kind_for(row.get("doc_type"))
         template_name = template_for_kind(kind)
-
         subject = build_subject(kind, row.get("doc_type"), str(label))
+
+        # ✅ Approve/Reject only for Service Quote + Project Quote
+        reviewable = _is_reviewable_quote(row.get("doc_type") or "")
+        approve_url = None
+        reject_url = None
+
+        if reviewable:
+            review_base = (os.getenv("PUBLIC_PORTAL_BASE_URL") or "").rstrip("/")
+            if not review_base:
+                raise RuntimeError("Missing PUBLIC_PORTAL_BASE_URL (frontend base URL)")
+            print("PUBLIC_PORTAL_BASE_URL =", os.getenv("PUBLIC_PORTAL_BASE_URL"))
+            
+            approve_token = make_token(doc_id, "accept")
+            reject_token = make_token(doc_id, "reject")
+            approve_url = f"{review_base}/review?token={approve_token}"
+            reject_url = f"{review_base}/review?token={reject_token}"
+
+            # ✅ Make sure it is reviewable even after we mark it SENT
+            # (accept/reject endpoints will allow READY_FOR_REVIEW or SENT)
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET status = CASE
+                        WHEN status IN ('APPROVED','REJECTED') THEN status
+                        ELSE 'READY_FOR_REVIEW'
+                    END,
+                    updated_at = now()
+                    WHERE id = :id
+                    """
+                ),
+                {"id": doc_id},
+            )
+            db.commit()
 
         context = {
             "greeting": greeting,
@@ -544,21 +558,24 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "label": label,
             "file_url": file_url,
             "filename": filename,
+            "reviewable": reviewable,
+            "approve_url": approve_url,
+            "reject_url": reject_url,
         }
 
         html_body = render_html(template_name, context)
 
-        # simple plaintext fallback
         text_body = (
             f"{greeting}\n\n"
             f"Please find the document attached.\n"
             f"Link: {file_url}\n\n"
-            f"If you have any questions, reply to this email.\n"
         )
+        if reviewable and approve_url and reject_url:
+            text_body += f"Approve: {approve_url}\nReject: {reject_url}\n\n"
+        text_body += "If you have any questions, reply to this email.\n"
 
         cc_list = [str(x) for x in (body.cc or [])]
 
-        # 5) Send via Brevo SMTP
         send_email_brevo_smtp(
             to_email=to_email,
             subject=subject,
@@ -574,9 +591,9 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             ],
         )
 
-        # 6) Store sent metadata + mark SENT
         sent_cc = ", ".join(cc_list) if cc_list else None
 
+        # ✅ keep status SENT after sending
         db.execute(
             text(
                 """
@@ -606,36 +623,87 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "sent_at": sent_row["sent_at"] if sent_row else None,
             "kind": kind,
             "template": template_name,
+            "reviewable": reviewable,
         }
-    
-# --- Review actions: Accept / Reject (human approval) -----------------
+
+
+# --- Review actions: Accept / Reject (client approval) -----------------
 
 class AcceptIn(BaseModel):
-    # optional fields you already have in documents table
     quote_po_number: Optional[str] = None
     quote_note: Optional[str] = None
-    # If true, auto-send email after accept (optional)
     send_email: bool = False
     cc: Optional[List[EmailStr]] = None
+    token: str  # ✅ required
 
 
 class RejectIn(BaseModel):
     reason: Optional[str] = None
+    token: str  # ✅ required
+
+
+def _notify_support_approved(doc_id: str, quote_label: str, po: str | None, note: str | None):
+    subject = f"Quote {quote_label} APPROVED"
+    text_body = (
+        f"Quote {quote_label} has been APPROVED.\n\n"
+        f"PO Number: {(po or '').strip()}\n"
+        f"Notes: {(note or '').strip()}\n"
+        f"Document ID: {doc_id}\n"
+    )
+    html_body = text_body.replace("\n", "<br>")
+
+    send_email_brevo_smtp(
+        to_email="support@mainlinefire.com",
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        cc_emails=[],
+        attachments=[],
+    )
+
+
+def _notify_support_rejected(doc_id: str, quote_label: str, reason: str | None):
+    subject = f"Quote {quote_label} REJECTED"
+    text_body = (
+        f"Quote {quote_label} has been REJECTED.\n\n"
+        f"Reason: {(reason or '').strip()}\n"
+        f"Document ID: {doc_id}\n"
+    )
+    html_body = text_body.replace("\n", "<br>")
+
+    send_email_brevo_smtp(
+        to_email="support@mainlinefire.com",
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        cc_emails=[],
+        attachments=[],
+    )
 
 
 @app.post("/api/documents/{doc_id}/accept")
 def accept_document(doc_id: str, body: AcceptIn):
+    # ✅ verify JWT (expired/invalid will raise)
+    claims = verify_token(body.token)
+    if claims["doc_id"] != doc_id or claims["action"] != "accept":
+        raise HTTPException(status_code=403, detail="Invalid token for this action")
+
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT id, status FROM public.documents WHERE id=:id"),
+            text("SELECT id, status, doc_type, quote_number FROM public.documents WHERE id=:id"),
             {"id": doc_id},
         ).mappings().first()
 
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
-        if row["status"] != "READY_FOR_REVIEW":
+        # ✅ allow accept if READY_FOR_REVIEW OR SENT (because send-email sets SENT)
+        if row["status"] not in ("READY_FOR_REVIEW", "SENT"):
             raise HTTPException(status_code=409, detail=f"Cannot accept when status={row['status']}")
+
+        # ✅ extra safety: only allow for reviewable quotes
+        if not _is_reviewable_quote(row.get("doc_type") or ""):
+            raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={row.get('doc_type')}")
 
         db.execute(
             text(
@@ -655,24 +723,38 @@ def accept_document(doc_id: str, body: AcceptIn):
         )
         db.commit()
 
+        quote_label = row.get("quote_number") or doc_id[:8]
+
+    # ✅ notify support
+    _notify_support_approved(doc_id, quote_label, body.quote_po_number, body.quote_note)
+
+    # optional: auto-send (keep if you want; usually false for client review)
     if body.send_email:
         return send_email_any(doc_id, SendEmailIn(client_email=None, cc=body.cc))
 
     return {"ok": True, "id": doc_id, "status": "APPROVED"}
 
+
 @app.post("/api/documents/{doc_id}/reject")
 def reject_document(doc_id: str, body: RejectIn):
+    claims = verify_token(body.token)
+    if claims["doc_id"] != doc_id or claims["action"] != "reject":
+        raise HTTPException(status_code=403, detail="Invalid token for this action")
+
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT id, status FROM public.documents WHERE id=:id"),
+            text("SELECT id, status, doc_type, quote_number FROM public.documents WHERE id=:id"),
             {"id": doc_id},
         ).mappings().first()
 
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
-        if row["status"] != "READY_FOR_REVIEW":
+        if row["status"] not in ("READY_FOR_REVIEW", "SENT"):
             raise HTTPException(status_code=409, detail=f"Cannot reject when status={row['status']}")
+
+        if not _is_reviewable_quote(row.get("doc_type") or ""):
+            raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={row.get('doc_type')}")
 
         db.execute(
             text(
@@ -689,5 +771,8 @@ def reject_document(doc_id: str, body: RejectIn):
         )
         db.commit()
 
+        quote_label = row.get("quote_number") or doc_id[:8]
+
+    _notify_support_rejected(doc_id, quote_label, body.reason)
+
     return {"ok": True, "id": doc_id, "status": "REJECTED"}
-  

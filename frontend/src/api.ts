@@ -53,3 +53,22 @@ export async function sendEmail(docId: string, payload: { cc?: string[]; client_
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export async function acceptQuote(
+  docId: string,
+  payload: { token: string; quote_po_number?: string | null; quote_note?: string | null }
+) {
+  return httpJson(`${API_BASE}/api/documents/${docId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function rejectQuote(docId: string, payload: { token: string; reason?: string | null }) {
+  return httpJson(`${API_BASE}/api/documents/${docId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
