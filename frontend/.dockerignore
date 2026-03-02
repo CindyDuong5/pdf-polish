@@ -2,3 +2,6 @@ node_modules
 dist
 .vite
 .env*
+# ✅ Keep templates (PDF template + fonts + logo) inside the container
+!templates/
+!templates/**
