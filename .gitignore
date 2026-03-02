@@ -64,3 +64,13 @@ __pycache__/
 
 # Virtual env
 .venv/
+
+
+# ===== Allow template assets for PDF rendering =====
+!templates/
+!templates/**/*.pdf
+!templates/**/*.png
+!templates/**/*.jpg
+!templates/**/*.jpeg
+!templates/**/*.otf
+!templates/**/*.ttf

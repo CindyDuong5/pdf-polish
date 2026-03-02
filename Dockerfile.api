@@ -7,4 +7,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
 
+RUN echo "---- CHECKING TEMPLATES ----" && \
+    ls -la /app/templates && \
+    ls -la /app/templates/fonts && \
+    test -f /app/templates/Mainline-Service-Quote.pdf && \
+    test -f /app/templates/fonts/Mainline-Primary-Logo-Black.png
+
 CMD ["sh", "-c", "uvicorn app.api_main:app --host 0.0.0.0 --port ${PORT:-8080}"]

@@ -1,0 +1,16 @@
+# ignore big stuff
+.venv
+__pycache__
+*.pyc
+.git
+node_modules
+frontend/node_modules
+frontend/dist
+frontend/.vite
+tmp
+.DS_Store
+.env*
+
+# IMPORTANT: keep templates in the container
+!templates/
+!templates/**
