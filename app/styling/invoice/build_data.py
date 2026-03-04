@@ -28,4 +28,10 @@ def build_invoice_pdf_data_from_number(bo, invoice_number: str) -> Dict[str, Any
     if prop_id and hasattr(bo, "get_property_by_id"):
         property_obj = bo.get_property_by_id(prop_id)
 
-    return map_buildops_invoice_to_pdf_data(invoice, customer=customer, property_obj=property_obj)
+    normalized = map_buildops_invoice_to_pdf_data(invoice, customer=customer, property_obj=property_obj)
+
+    # ✅ IMPORTANT: store BuildOps invoice id so we can request payment link later
+    normalized["buildops_invoice_id"] = invoice_id
+    normalized["buildops_invoice_number"] = str(invoice_number).strip()
+
+    return normalized

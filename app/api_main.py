@@ -5,12 +5,11 @@ import os
 from pathlib import Path
 from typing import Literal, List, Optional
 
-from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
+from app.db import SessionLocal  # ✅ reuse shared session
 
 from app.email.smtp_sender import EmailAttachment, send_email_brevo_smtp
 from app.email.template_router import build_subject, email_kind_for, render_html, template_for_kind
@@ -22,15 +21,13 @@ from app.services.styling_service import ensure_draft
 from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
 from app.storage.s3_storage import get_storage
 from app.styling.service_quote.renderer import render_service_quote
-
-
-load_dotenv()
-DATABASE_URL = os.environ["DATABASE_URL"]
-
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+from app.api_invoice import router as invoice_router
+from app.services.payment_link import get_invoice_payment_link
 
 app = FastAPI(title="PDF Polish API")
+
+# Include the invoice router
+app.include_router(invoice_router)
 
 # CORS for local frontend dev (React/Vite/etc.)
 app.add_middleware(
@@ -337,23 +334,53 @@ def restyle_document(doc_id: str):
 # ------------------------------------------------------------
 # Fields: editable JSON (draft/final)
 # ------------------------------------------------------------
+# app/api_main.py
+
 @app.get("/api/documents/{doc_id}/fields")
 def get_document_fields(doc_id: str):
     with SessionLocal() as db:
+        # A) Service Quote / Project Quote editor table
         row = get_fields(db, doc_id)
         if not row:
             ensure_draft(db, doc_id, force=False)
             row = get_fields(db, doc_id)
 
-        if not row:
-            raise HTTPException(status_code=404, detail="No fields available")
+        if row:
+            return {
+                "doc_id": doc_id,
+                "draft": row.get("draft_json"),
+                "final": row.get("final_json"),
+                "source": "document_fields",
+            }
 
-        return {
-            "doc_id": doc_id,
-            "draft": row.get("draft_json"),
-            "final": row.get("final_json"),
-        }
+        # B) Fallback for INVOICE (and anything stored on documents row)
+        r2 = db.execute(
+            text(
+                """
+                SELECT doc_type, extracted_fields, user_overrides
+                FROM public.documents
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id},
+        ).mappings().first()
 
+        if not r2:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        extracted = r2.get("extracted_fields")
+        overrides = r2.get("user_overrides")
+
+        if extracted or overrides:
+            return {
+                "doc_id": doc_id,
+                "draft": extracted,
+                "final": overrides,
+                "source": "documents_json",
+                "doc_type": r2.get("doc_type"),
+            }
+
+        raise HTTPException(status_code=404, detail="No fields available")
 
 # ------------------------------------------------------------
 # ✅ Save Final from edited fields (Service Quote)
@@ -493,6 +520,38 @@ def _display_quote_label(quote_number: str | None, doc_id: str) -> str:
     """
     return (quote_number or "").strip() or doc_id[:8]
 
+def _as_dict_maybe(v):
+    """
+    Supabase/SQLAlchemy can return jsonb as dict already, or sometimes as a JSON string.
+    Normalize to dict.
+    """
+    if v is None:
+        return {}
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return {}
+        try:
+            import json
+            parsed = json.loads(s)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _get_buildops_invoice_id(rowd: dict) -> str | None:
+    """
+    Prefer user_overrides first (if user edited), else extracted_fields.
+    """
+    overrides = _as_dict_maybe(rowd.get("user_overrides"))
+    extracted = _as_dict_maybe(rowd.get("extracted_fields"))
+
+    inv_id = (overrides.get("buildops_invoice_id") or extracted.get("buildops_invoice_id") or "").strip()
+    return inv_id or None
+
 @app.post("/api/documents/{doc_id}/send-email")
 def send_email_any(doc_id: str, body: SendEmailIn):
 
@@ -505,6 +564,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
           d.customer_email,
           d.property_address,
           d.invoice_number,
+          d.extracted_fields,
+          d.user_overrides,
           d.quote_number,
           d.job_report_number,
           d.original_s3_key,
@@ -573,6 +634,17 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             approve_url = f"{review_base}/review?token={approve_token}"
             reject_url = f"{review_base}/review?token={reject_token}"
 
+        # ✅ Payment link (only for INVOICE)
+        payment_url = None
+        if "INVOICE" in (doc_type or "").upper():
+            buildops_invoice_id = _get_buildops_invoice_id(rowd)
+            if buildops_invoice_id:
+                try:
+                    payment_url = get_invoice_payment_link(buildops_invoice_id)
+                except Exception as e:
+                    # Do NOT block sending if payment link fails (optional)
+                    payment_url = None
+
         # -----------------------------
         # TEMPLATE ROUTING
         # -----------------------------
@@ -589,7 +661,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "quote_number": display_quote_number,
                 "property_name": property_name,
                 "company_name": company_name,
-                "quote_url": file_url,          # your template expects quote_url
+                "quote_url": file_url,
                 "approve_url": approve_url,
                 "reject_url": reject_url,
                 "now": "",
@@ -618,17 +690,20 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "label": label,
                 "file_url": file_url,
                 "filename": filename,
+                "payment_url": payment_url,  # ✅ add to templates
                 "reviewable": False,
                 "approve_url": None,
                 "reject_url": None,
             }
 
             html_body = render_html(template_name, context)
+
             text_body = (
                 f"{greeting}\n\n"
                 f"Please find the document attached.\n"
                 f"Link: {file_url}\n\n"
-                "If you have any questions, reply to this email.\n"
+                + (f"Pay by Credit Card: {payment_url}\n\n" if payment_url else "")
+                + "If you have any questions, reply to this email.\n"
             )
 
         # send
@@ -680,6 +755,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "sent_at": sent_row["sent_at"] if sent_row else None,
             "template": template_name,
             "reviewable": reviewable,
+            "payment_url": payment_url if ("INVOICE" in (doc_type or "").upper()) else None,
             "quote_number": display_quote_number if reviewable else None,
         }
     
