@@ -1,5 +1,5 @@
 // frontend/src/panels/serviceQuote/ServiceQuotePanel.tsx
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import ServiceQuoteEditor from "../../components/ServiceQuoteEditor";
 import type { DocRow, Links, ServiceQuoteFields } from "../../types";

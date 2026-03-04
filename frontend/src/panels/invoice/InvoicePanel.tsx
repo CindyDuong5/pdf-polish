@@ -1,5 +1,5 @@
 // frontend/src/panels/invoice/InvoicePanel.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import InvoiceEditor, { type InvoiceFields } from "../../components/InvoiceEditor";
 import type { DocRow, Links } from "../../types";
