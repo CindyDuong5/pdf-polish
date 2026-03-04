@@ -1,14 +1,16 @@
 // frontend/src/api.ts
 const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "https://pdf-polish-api-722522316664.northamerica-northeast1.run.app";
+  import.meta.env.VITE_API_BASE_URL ||
+  "https://pdf-polish-api-722522316664.northamerica-northeast1.run.app";
 
 async function httpJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   const text = await res.text();
   let data: any = null;
-  try { data = text ? JSON.parse(text) : null; } catch {}
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {}
   if (!res.ok) {
-    // prefer FastAPI detail if present
     throw new Error(data?.detail || text || res.statusText);
   }
   return data;
@@ -36,12 +38,11 @@ export async function restyleDoc(docId: string) {
   return httpJson(`${API_BASE}/api/documents/${docId}/restyle`, { method: "POST" });
 }
 
-// ✅ NEW
+// fields + final
 export async function getFields(docId: string) {
   return httpJson(`${API_BASE}/api/documents/${docId}/fields`);
 }
 
-// ✅ NEW
 export async function saveFinal(docId: string, fields: any) {
   return httpJson(`${API_BASE}/api/documents/${docId}/save-final`, {
     method: "POST",
@@ -50,6 +51,7 @@ export async function saveFinal(docId: string, fields: any) {
   });
 }
 
+// service quote email
 export async function sendEmail(docId: string, payload: { cc?: string[]; client_email?: string }) {
   const res = await fetch(`${API_BASE}/api/documents/${docId}/send-email`, {
     method: "POST",
@@ -60,6 +62,30 @@ export async function sendEmail(docId: string, payload: { cc?: string[]; client_
   return res.json();
 }
 
+// ✅ NEW: invoice send
+export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?: string }) {
+  // backend should implement /api/documents/:id/send-invoice
+  return httpJson(`${API_BASE}/api/documents/${docId}/send-invoice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+// ✅ NEW: lookup invoice doc by invoice number (optional UX)
+// backend should implement /api/invoices/lookup?number=1013
+export async function lookupInvoiceByNumber(invoiceNumber: string) {
+  const usp = new URLSearchParams({ number: String(invoiceNumber).trim() });
+  return httpJson(`${API_BASE}/api/invoices/lookup?${usp.toString()}`);
+}
+
+// ✅ NEW: payment link for invoice (optional UX)
+// backend should implement /api/invoices/:docId/payment-link
+export async function getInvoicePaymentLink(docId: string) {
+  return httpJson(`${API_BASE}/api/invoices/${docId}/payment-link`);
+}
+
+// quote decision endpoints (existing)
 export async function acceptQuote(
   docId: string,
   payload: { token: string; quote_po_number?: string | null; quote_note?: string | null }
@@ -82,4 +108,12 @@ export async function rejectQuote(docId: string, payload: { token: string; reaso
 export async function getQuoteDecision(docId: string, token: string) {
   const qs = new URLSearchParams({ token }).toString();
   return httpJson(`${API_BASE}/api/documents/${docId}/quote-decision?${qs}`);
+}
+
+export async function buildInvoiceByNumber(invoiceNumber: string) {
+  return httpJson(`${API_BASE}/api/invoices/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ invoice_number: invoiceNumber }),
+  });
 }

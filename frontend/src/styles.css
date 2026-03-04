@@ -268,3 +268,38 @@ body{
   border: 1px dashed var(--border);
   border-radius: 16px;
 }
+
+/* Invoice editor table layout */
+.invTableHeader,
+.invTableRow {
+  display: grid;
+  grid-template-columns: 3fr 0.9fr 0.9fr 1.2fr 1fr 1.2fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.invTableHeader {
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 6px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.invTableRow {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.invAmount {
+  text-align: right;
+  font-weight: 800;
+}
+
+.invChk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  opacity: 0.9;
+}

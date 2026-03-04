@@ -1,6 +1,6 @@
 // frontend/src/App.tsx
 import { Routes, Route } from "react-router-dom";
-import MainApp from "./MainApp";
+import MainApp from "./pages/MainApp";
 import ReviewPage from "./pages/ReviewPage";
 
 export default function App() {

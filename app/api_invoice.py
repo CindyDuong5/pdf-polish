@@ -15,6 +15,7 @@ from app.storage.s3_storage import get_storage
 from app.buildops_client import BuildOpsClient
 from app.styling.invoice.build_data import build_invoice_pdf_data_from_number
 from app.styling.invoice.renderer import render_invoice_styled_draft
+from app.services.payment_link import get_invoice_payment_link  # ✅ add
 
 router = APIRouter(tags=["invoice"])
 
@@ -39,15 +40,35 @@ def _property_address_text(fields: dict) -> str | None:
     return joined.strip() or None
 
 
+def _safe_get_buildops_invoice_id(normalized: dict) -> str | None:
+    # prefer explicit fields
+    for k in ("buildops_invoice_id", "invoice_id", "id"):
+        v = normalized.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 @router.post("/api/invoices/build")
 def build_invoice_from_number(body: BuildInvoiceIn):
-
     inv_num = (body.invoice_number or "").strip()
     if not inv_num:
         raise HTTPException(status_code=400, detail="invoice_number required")
 
     bo = BuildOpsClient()
     normalized = build_invoice_pdf_data_from_number(bo, inv_num)
+
+    # ✅ fetch payment link NOW so UI can show it
+    payment_url = None
+    try:
+        buildops_invoice_id = _safe_get_buildops_invoice_id(normalized)
+        if buildops_invoice_id:
+            payment_url = get_invoice_payment_link(buildops_invoice_id)
+    except Exception:
+        payment_url = None  # do not block invoice generation
+
+    if payment_url:
+        normalized["payment_url"] = payment_url  # ✅ store in fields
 
     doc_id = str(uuid4())
     storage = get_storage()
@@ -62,18 +83,11 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     draft_key = _styled_draft_key_for(doc_id)
     storage.upload_pdf_bytes(draft_key, pdf_bytes)
 
-    bill_email = (
-        normalized.get("billClient_email")
-        or normalized.get("client_email")
-        or ""
-    ).strip() or None
-
+    bill_email = (normalized.get("billClient_email") or normalized.get("client_email") or "").strip() or None
     bill_name = (normalized.get("billClient_name") or "").strip() or None
-
     prop_addr = _property_address_text(normalized)
 
     with SessionLocal() as db:
-
         db.execute(
             text(
                 """
@@ -118,7 +132,6 @@ def build_invoice_from_number(body: BuildInvoiceIn):
                 "extracted_fields": json.dumps(normalized),
             },
         )
-
         db.commit()
 
     url = storage.presign_get_url(
@@ -134,18 +147,26 @@ def build_invoice_from_number(body: BuildInvoiceIn):
         "invoice_number": inv_num,
         "styled_draft_s3_key": draft_key,
         "url": url,
+        "payment_url": payment_url,  # ✅ return to frontend too
     }
 
 
 @router.post("/api/documents/{doc_id}/invoice/save-final")
 def save_final_invoice(doc_id: str, body: dict = Body(...)):
-
     fields = body.get("fields")
     if not isinstance(fields, dict):
         raise HTTPException(status_code=400, detail="Missing fields")
 
-    storage = get_storage()
+    # ✅ keep payment_url if present; if missing, try to refetch
+    if not fields.get("payment_url"):
+        try:
+            buildops_invoice_id = _safe_get_buildops_invoice_id(fields)
+            if buildops_invoice_id:
+                fields["payment_url"] = get_invoice_payment_link(buildops_invoice_id)
+        except Exception:
+            pass
 
+    storage = get_storage()
     logo_path = os.getenv("MAINLINE_LOGO_PATH") or os.getenv("INVOICE_LOGO_PATH")
 
     final_bytes = render_invoice_styled_draft(
@@ -154,21 +175,13 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     )
 
     fk = _final_key_for(doc_id)
-
     storage.upload_pdf_bytes(fk, final_bytes)
 
-    bill_email = (
-        fields.get("billClient_email")
-        or fields.get("client_email")
-        or ""
-    ).strip() or None
-
+    bill_email = (fields.get("billClient_email") or fields.get("client_email") or "").strip() or None
     bill_name = (fields.get("billClient_name") or "").strip() or None
-
     prop_addr = _property_address_text(fields)
 
     with SessionLocal() as db:
-
         db.execute(
             text(
                 """
@@ -194,12 +207,11 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
                 "fields": json.dumps(fields),
             },
         )
-
         db.commit()
 
-    return {"ok": True, "final_s3_key": fk}
+    return {"ok": True, "final_s3_key": fk, "payment_url": fields.get("payment_url")}
+
 
 @router.post("/api/documents/{doc_id}/save-final")
 def save_final_invoice_alias(doc_id: str, body: dict = Body(...)):
-    # reuse the existing function
     return save_final_invoice(doc_id, body)
