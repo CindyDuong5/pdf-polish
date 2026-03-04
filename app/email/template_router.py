@@ -1,3 +1,4 @@
+# app/email/template_router.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +41,7 @@ def build_subject(kind: str, doc_type: str | None, label: str) -> str:
     if kind == "QUOTE":
         return f"Quote {label} – Please Review"
     if kind == "INVOICE":
-        return f"Invoice {label}"
+        return f"Invoice #{label.lstrip('#')}"
     if kind == "JOB_REPORT":
         return f"Report {label}"
     return f"{doc_type or 'Document'} {label}"

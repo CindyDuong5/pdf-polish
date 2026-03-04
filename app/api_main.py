@@ -15,7 +15,7 @@ from app.email.smtp_sender import EmailAttachment, send_email_brevo_smtp
 from app.email.template_router import build_subject, email_kind_for, render_html, template_for_kind
 from app.security.quote_response_token import make_token, verify_token  # ✅ use your existing JWT
 from app.services.document_fields import get_fields, set_final
-from app.services.keys import final_key
+from app.services.keys import final_key_for
 from app.services.pdf_stamp import stamp_pdf
 from app.services.styling_service import ensure_draft
 from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
@@ -270,7 +270,7 @@ def finalize_document(
             raise HTTPException(status_code=400, detail="Document missing original_s3_key")
 
         source_key = draft_key or original_key
-        final_key_path = final_key(original_key, doc_id)
+        final_key_path = final_key_for(original_key, doc_id)
 
         db.execute(
             text(
@@ -396,12 +396,19 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT id, original_s3_key FROM public.documents WHERE id=:id"),
+            text("SELECT id, doc_type, original_s3_key FROM public.documents WHERE id=:id"),
             {"id": doc_id},
         ).mappings().first()
 
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
+
+        doc_type = row.get("doc_type") or ""
+        dt = doc_type.upper()
+
+        # ✅ Guard: this endpoint must only finalize quotes
+        if ("SERVICE_QUOTE" not in dt) and ("PROJECT_QUOTE" not in dt) and ("QUOTE" not in dt):
+            raise HTTPException(status_code=409, detail=f"Not a quote document (doc_type={doc_type})")
 
         original_key = row["original_s3_key"]
         if not original_key:
@@ -414,9 +421,11 @@ def save_final(doc_id: str, body: dict = Body(...)):
         db.commit()
 
         try:
+            # save JSON to document_fields.final_json
             set_final(db, doc_id, fields)
             db.commit()
 
+            # denormalize into documents table for list view/search
             client_email = (fields.get("client_email") or "").strip() or None
             client_name = (fields.get("client_name") or "").strip() or None
             prop_addr = (fields.get("property_address") or "").strip() or None
@@ -444,11 +453,17 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
 
+            # render final PDF
             data = json_to_service_quote(fields)
-            template_path = Path(os.getenv("SERVICE_QUOTE_TEMPLATE_PDF") or "templates/Mainline-Service-Quote.pdf")
+
+            template_path = Path(
+                os.getenv("SERVICE_QUOTE_TEMPLATE_PDF") or "templates/Mainline-Service-Quote.pdf"
+            )
+
             final_bytes = render_service_quote(template_path, data)
 
-            fk = final_key(original_key, doc_id)
+            # ✅ namespaced final key by doc_type
+            fk = final_key_for(original_key, doc_id, doc_type=doc_type)
             storage.upload_pdf_bytes(fk, final_bytes)
 
             db.execute(
@@ -476,7 +491,6 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
             raise
-
 
 class SendEmailIn(BaseModel):
     client_email: Optional[EmailStr] = None

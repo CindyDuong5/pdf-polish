@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import InvoiceEditor, { type InvoiceFields } from "../../components/InvoiceEditor";
 import type { DocRow, Links } from "../../types";
-import { getFields, saveFinal, sendEmail, getLinks } from "../../api";
+import { getFields, saveFinalInvoice, sendInvoice, getLinks } from "../../api";
 import { recomputeInvoiceTotals } from "./totals";
 
 export default function InvoicePanel(props: {
@@ -82,7 +82,7 @@ export default function InvoicePanel(props: {
     setErr(null);
     setSavingFinal(true);
     try {
-      await saveFinal(props.selectedId, recomputeInvoiceTotals(fields));
+      await saveFinalInvoice(props.selectedId, recomputeInvoiceTotals(fields));
       setMsg("Saved Final ✅");
 
       // ✅ refresh links so Final preview shows
@@ -110,7 +110,7 @@ export default function InvoicePanel(props: {
 
     try {
       const cc = parseCc(ccInput);
-      await sendEmail(props.selectedId, { client_email: to, cc });
+      await sendInvoice(props.selectedId, { to, cc });
       setMsg("Invoice email sent ✅");
     } catch (e: any) {
       setErr(e?.message || String(e));

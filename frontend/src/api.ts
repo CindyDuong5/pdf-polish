@@ -64,8 +64,8 @@ export async function sendEmail(docId: string, payload: { cc?: string[]; client_
 
 // ✅ NEW: invoice send
 export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?: string }) {
-  // backend should implement /api/documents/:id/send-invoice
-  return httpJson(`${API_BASE}/api/documents/${docId}/send-invoice`, {
+  // POST /api/documents/:id/invoice/send
+  return httpJson(`${API_BASE}/api/documents/${docId}/invoice/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload || {}),
@@ -115,5 +115,13 @@ export async function buildInvoiceByNumber(invoiceNumber: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ invoice_number: invoiceNumber }),
+  });
+}
+
+export async function saveFinalInvoice(docId: string, fields: any) {
+  return httpJson(`${API_BASE}/api/documents/${docId}/invoice/save-final`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
   });
 }

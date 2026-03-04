@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import requests
 from datetime import datetime, timezone
+from typing import Optional, List
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, HTTPException
@@ -13,9 +15,16 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.storage.s3_storage import get_storage
 from app.buildops_client import BuildOpsClient
+from app.email.smtp_sender import send_email_brevo_smtp, EmailAttachment
+from app.email.template_router import (
+    email_kind_for,
+    template_for_kind,
+    render_html,
+    build_subject,
+)
+from app.services.payment_link import get_invoice_payment_link
 from app.styling.invoice.build_data import build_invoice_pdf_data_from_number
 from app.styling.invoice.renderer import render_invoice_styled_draft
-from app.services.payment_link import get_invoice_payment_link  # ✅ add
 
 router = APIRouter(tags=["invoice"])
 
@@ -24,15 +33,23 @@ class BuildInvoiceIn(BaseModel):
     invoice_number: str
 
 
+class SendInvoiceEmailIn(BaseModel):
+    # accept both (frontend uses `to` + `cc`)
+    to_email: Optional[str] = None
+    to: Optional[str] = None
+
+    cc_emails: Optional[List[str]] = None
+    cc: Optional[List[str]] = None
+
+
 def _styled_draft_key_for(doc_id: str) -> str:
     d = datetime.now(timezone.utc).date().isoformat()
-    return f"styled_draft/{d}/{doc_id}.pdf"
+    return f"styled_draft/invoices/{d}/{doc_id}.pdf"
 
 
 def _final_key_for(doc_id: str) -> str:
     d = datetime.now(timezone.utc).date().isoformat()
-    return f"final/{d}/{doc_id}.pdf"
-
+    return f"final/invoices/{d}/{doc_id}.pdf"
 
 def _property_address_text(fields: dict) -> str | None:
     lines = fields.get("property_address_lines") or []
@@ -40,13 +57,21 @@ def _property_address_text(fields: dict) -> str | None:
     return joined.strip() or None
 
 
-def _safe_get_buildops_invoice_id(normalized: dict) -> str | None:
+def _safe_get_buildops_invoice_id(fields: dict) -> str | None:
     # prefer explicit fields
     for k in ("buildops_invoice_id", "invoice_id", "id"):
-        v = normalized.get(k)
+        v = fields.get(k)
         if isinstance(v, str) and v.strip():
             return v.strip()
     return None
+
+
+def _best_fields(row: dict) -> dict:
+    uo = row.get("user_overrides") or {}
+    ex = row.get("extracted_fields") or {}
+    if isinstance(uo, dict) and uo:
+        return uo
+    return ex if isinstance(ex, dict) else {}
 
 
 @router.post("/api/invoices/build")
@@ -58,27 +83,23 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     bo = BuildOpsClient()
     normalized = build_invoice_pdf_data_from_number(bo, inv_num)
 
-    # ✅ fetch payment link NOW so UI can show it
+    # Fetch payment link (non-blocking)
     payment_url = None
     try:
         buildops_invoice_id = _safe_get_buildops_invoice_id(normalized)
         if buildops_invoice_id:
             payment_url = get_invoice_payment_link(buildops_invoice_id)
     except Exception:
-        payment_url = None  # do not block invoice generation
+        payment_url = None
 
     if payment_url:
-        normalized["payment_url"] = payment_url  # ✅ store in fields
+        normalized["payment_url"] = payment_url
 
     doc_id = str(uuid4())
     storage = get_storage()
 
     logo_path = os.getenv("MAINLINE_LOGO_PATH") or os.getenv("INVOICE_LOGO_PATH")
-
-    pdf_bytes = render_invoice_styled_draft(
-        normalized,
-        logo_path=logo_path,
-    )
+    pdf_bytes = render_invoice_styled_draft(normalized, logo_path=logo_path)
 
     draft_key = _styled_draft_key_for(doc_id)
     storage.upload_pdf_bytes(draft_key, pdf_bytes)
@@ -147,9 +168,8 @@ def build_invoice_from_number(body: BuildInvoiceIn):
         "invoice_number": inv_num,
         "styled_draft_s3_key": draft_key,
         "url": url,
-        "payment_url": payment_url,  # ✅ return to frontend too
+        "payment_url": payment_url,
     }
-
 
 @router.post("/api/documents/{doc_id}/invoice/save-final")
 def save_final_invoice(doc_id: str, body: dict = Body(...)):
@@ -157,7 +177,21 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     if not isinstance(fields, dict):
         raise HTTPException(status_code=400, detail="Missing fields")
 
-    # ✅ keep payment_url if present; if missing, try to refetch
+    # ✅ Guard: only invoices allowed
+    with SessionLocal() as db:
+        doc = db.execute(
+            text("SELECT id, doc_type, customer_email FROM public.documents WHERE id=:id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not doc:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        dt = (doc.get("doc_type") or "").upper()
+        if "INVOICE" not in dt:
+            raise HTTPException(status_code=409, detail=f"Not an invoice document (doc_type={doc.get('doc_type')})")
+
+    # Keep payment_url if present; if missing, try to refetch (non-blocking)
     if not fields.get("payment_url"):
         try:
             buildops_invoice_id = _safe_get_buildops_invoice_id(fields)
@@ -168,11 +202,7 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
 
     storage = get_storage()
     logo_path = os.getenv("MAINLINE_LOGO_PATH") or os.getenv("INVOICE_LOGO_PATH")
-
-    final_bytes = render_invoice_styled_draft(
-        fields,
-        logo_path=logo_path,
-    )
+    final_bytes = render_invoice_styled_draft(fields, logo_path=logo_path)
 
     fk = _final_key_for(doc_id)
     storage.upload_pdf_bytes(fk, final_bytes)
@@ -212,6 +242,112 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     return {"ok": True, "final_s3_key": fk, "payment_url": fields.get("payment_url")}
 
 
-@router.post("/api/documents/{doc_id}/save-final")
-def save_final_invoice_alias(doc_id: str, body: dict = Body(...)):
-    return save_final_invoice(doc_id, body)
+@router.post("/api/documents/{doc_id}/invoice/send")
+def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
+    storage = get_storage()
+
+    with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT * FROM public.documents WHERE id = :id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        row = dict(row)
+        fields = _best_fields(row)
+
+        final_key = row.get("final_s3_key")
+        if not final_key:
+            raise HTTPException(status_code=400, detail="Invoice not finalized yet. Please Save Final first.")
+
+        invoice_number = (row.get("invoice_number") or fields.get("invoice_number") or "").strip()
+        customer_name = (row.get("customer_name") or fields.get("billClient_name") or "Customer").strip()
+        property_address = row.get("property_address") or _property_address_text(fields)
+
+        payment_url = fields.get("payment_url")
+
+        # Normalize To
+        to_email = (
+            (body.to_email or body.to)
+            or row.get("customer_email")
+            or fields.get("billClient_email")
+            or ""
+        ).strip()
+        if not to_email:
+            raise HTTPException(status_code=400, detail="Missing to_email (and no customer_email on document)")
+
+        # Normalize CC
+        cc = body.cc_emails or body.cc or []
+        cc = [e.strip() for e in cc if isinstance(e, str) and e.strip()]
+
+        view_url = storage.presign_get_url(
+            key=final_key,
+            expires_seconds=7 * 24 * 3600,
+            download_filename=f"INVOICE_{invoice_number or doc_id}.pdf",
+            inline=True,
+        )
+
+        # Download PDF bytes for attachment
+        try:
+            r = requests.get(view_url, timeout=60)
+            r.raise_for_status()
+            pdf_bytes = r.content
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to download PDF for attachment: {e}")
+
+        kind = email_kind_for("INVOICE")
+        tpl = template_for_kind(kind)
+        subject = build_subject(kind, "INVOICE", invoice_number or doc_id)
+
+        html = render_html(
+            tpl,
+            {
+                "invoice_number": invoice_number or "",
+                "customer_name": customer_name,
+                "property_address": property_address or "",
+                "view_url": view_url,
+                "payment_url": payment_url or "",
+            },
+        )
+
+        text_body = f"Invoice #{invoice_number}\nView: {view_url}\n" + (
+            f"Pay by Credit Card: {payment_url}\n" if payment_url else ""
+        )
+
+        # ✅ attachments tuple is OK (Sequence)
+        send_email_brevo_smtp(
+            to_email=to_email,
+            subject=subject,
+            html_body=html,
+            text_body=text_body,
+            cc_emails=cc,
+            attachments=(
+                EmailAttachment(
+                    filename=f"Invoice-{invoice_number or doc_id}.pdf",
+                    content_type="application/pdf",
+                    data=pdf_bytes,
+                ),
+            ),
+        )
+
+        db.execute(
+            text(
+                """
+                UPDATE public.documents
+                SET
+                    sent_to = :to_email,
+                    sent_cc = CAST(:cc AS jsonb),
+                    sent_at = now(),
+                    updated_at = now(),
+                    error = null,
+                    status = 'SENT'
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id, "to_email": to_email, "cc": json.dumps(cc)},
+        )
+        db.commit()
+
+    return {"ok": True, "to": to_email, "cc": cc, "view_url": view_url, "payment_url": payment_url}
