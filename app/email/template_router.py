@@ -37,11 +37,17 @@ def render_html(template_name: str, context: dict) -> str:
     return tpl.render(**context)
 
 def build_subject(kind: str, doc_type: str | None, label: str) -> str:
-    # You can tweak these anytime
     if kind == "QUOTE":
         return f"Quote {label} – Please Review"
+
     if kind == "INVOICE":
-        return f"Invoice #{label.lstrip('#')}"
+        inv = str(label or "").strip()
+        # normalize: remove leading "Invoice", spaces, and leading "#"
+        inv = inv.replace("Invoice", "").replace("invoice", "").strip()
+        inv = inv.lstrip("#").strip()
+        return f"Invoice #{inv} from Mainline Fire Protection" if inv else "Invoice from Mainline Fire Protection"
+
     if kind == "JOB_REPORT":
         return f"Report {label}"
+
     return f"{doc_type or 'Document'} {label}"
