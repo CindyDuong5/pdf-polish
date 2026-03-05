@@ -16,7 +16,7 @@ export default function DocumentPanel(props: {
   const type = (props.selected.doc_type || "").toUpperCase();
 
   if (type.includes("SERVICE_QUOTE")) {
-    return <ServiceQuotePanel {...props} />;
+    return <ServiceQuotePanel {...props} onLinksUpdated={props.onLinksUpdated}/>;
   }
 
   if (type.includes("INVOICE")) {

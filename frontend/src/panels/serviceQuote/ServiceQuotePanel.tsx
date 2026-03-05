@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import ServiceQuoteEditor from "../../components/ServiceQuoteEditor";
 import type { DocRow, Links, ServiceQuoteFields } from "../../types";
-import { sendEmail, saveFinal, getFields } from "../../api"; // ✅ add getFields
+import { sendEmail, saveFinal, getFields, getLinks } from "../../api"; // ✅ add getFields
 import { withComputedTotals } from "./totals";
 
 export default function ServiceQuotePanel(props: {
@@ -13,6 +13,7 @@ export default function ServiceQuotePanel(props: {
   reloadKey: number;
   onRestyle: () => Promise<void>;
   loading: boolean;
+  onLinksUpdated: (l: Links) => void;
 }) {
   const [fields, setFields] = useState<ServiceQuoteFields | null>(null);
   const [ccInput, setCcInput] = useState("");
@@ -61,6 +62,9 @@ export default function ServiceQuotePanel(props: {
     try {
       await saveFinal(props.selectedId, withComputedTotals(fields));
       setMsg("Saved Final ✅");
+      //✅ refresh links so Final URL appears immediately
+      const l = await getLinks(props.selectedId);
+      props.onLinksUpdated(l);
     } catch (e: any) {
       setErr(e?.message || String(e));
     }

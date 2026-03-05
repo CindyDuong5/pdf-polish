@@ -15,6 +15,11 @@ from reportlab.lib.utils import ImageReader
 from pypdf import PdfReader, PdfWriter
 from pypdf._page import PageObject
 
+from pathlib import Path
+import logging
+logger = logging.getLogger(__name__)
+
+DEFAULT_LOGO = Path(__file__).resolve().parents[3] / "templates" / "email-assets" / "Mainline-Primary-Logo-Black.png"
 
 PAGE_W, PAGE_H = letter
 
@@ -193,6 +198,8 @@ def _draw_header_v2_invoice(c: canvas.Canvas, logo_path: str | None) -> float:
 
     if logo_path:
         try:
+            p = Path(logo_path)
+            logger.info("Invoice logo path: %s exists=%s", p, p.exists())
             img = ImageReader(logo_path)
             iw, ih = img.getSize()
             scale = float(HEADER_LOGO_H) / float(ih) if ih else 1.0
@@ -200,7 +207,7 @@ def _draw_header_v2_invoice(c: canvas.Canvas, logo_path: str | None) -> float:
             lh = ih * scale
             c.drawImage(img, logo_x0, y_block_bottom, width=lw, height=lh, mask="auto")
         except Exception:
-            pass
+            logger.exception("Failed to draw logo. logo_path=%r", logo_path)
 
     base = y_block_bottom + 2
     c.setFont("Helvetica-Bold", HEADER_TEXT_FS)
@@ -265,6 +272,9 @@ def _stamp_footer(pdf_bytes: bytes) -> bytes:
 
 # ---------------- Renderer ----------------
 def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | None = None) -> bytes:
+    if not logo_path:
+        logo_path = str(DEFAULT_LOGO)
+        
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
 
