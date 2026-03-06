@@ -228,6 +228,55 @@ def _draw_header_v2_invoice(c: canvas.Canvas, logo_path: str | None) -> float:
 
     return y_rule - HEADER_BOTTOM_GAP
 
+def _wrap_paragraph_lines(text: str, fs: int, max_w: float, bold: bool = False) -> List[str]:
+    font = "Helvetica-Bold" if bold else "Helvetica"
+    out: List[str] = []
+    for para in (text or "").split("\n"):
+        para = para.strip()
+        if not para:
+            out.append("")
+            continue
+        out.extend(_wrap_lines(para, font, fs, max_w))
+    return out
+
+
+def _draw_multiline_block(
+    c: canvas.Canvas,
+    x: float,
+    y_top: float,
+    lines: List[str],
+    fs: int = FS_XS,
+    bold_first: bool = False,
+    line_gap: float = 11,
+    color=BLACK,
+) -> float:
+    """
+    Draws lines top-down starting at y_top.
+    Returns the bottom y after drawing.
+    """
+    y = y_top
+    for i, line in enumerate(lines):
+        is_bold = bold_first and i == 0
+        _draw_text(c, x, y, line, fs=fs, bold=is_bold, color=color)
+        y -= line_gap
+    return y
+
+def _draw_text_inline_segments(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    segments: List[Tuple[str, bool]],
+    fs: int = FS_XS,
+    color=BLACK,
+):
+    cur_x = x
+    for text, bold in segments:
+        _set_font(c, fs, bold)
+        c.setFillColor(color)
+        c.drawString(cur_x, y, text)
+        cur_x += stringWidth(text, c._fontname, fs)
+    c.setFillColor(BLACK)
+
 
 # ---------------- Footer stamping ----------------
 def _make_footer_overlay(page_num: int, page_count: int) -> bytes:
@@ -618,10 +667,19 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     # space before totals block
     y -= 28
 
-    # ===== Totals block (all rules + orange bar are full width of totals block) =====
+    # Payment Options
+    payment_title = "Payment Options:"
+
+    # ===== Totals block + Payment Options =====
     summary_w = 3.25 * inch
     sx1 = x1
     sx0 = sx1 - summary_w
+
+    # payment block sits to the left of totals block
+    payment_gap = 0.35 * inch
+    payment_x0 = x0 + 2
+    
+    
 
     label_x = sx1 - 120
     value_x = sx1
@@ -629,13 +687,42 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     row_h = 16
     bar_h = 18
 
+    payment_line_gap = 11
+
+    payment_render_lines: List[List[Tuple[str, bool]]] = [
+        [(payment_title, True)],
+        [("Pay securely using the payment link in the invoice email", False)],
+        [("Card payments are not accepted for invoices over $5,000", False)],
+        [("E-Transfer:", True), (" accounting@mainlinefire.com", False)],
+        [("EFT:", True), (" Transit 21642 • Institution 001 • Account 1001460", False)],
+        [("HST Registration No.:", True), (" 812882488", False)],
+        [("Please reference your invoice number with payment.", False)],
+        [("Questions? Call 647-325-8577.", False)],
+    ]
+
+    payment_h = len(payment_render_lines) * payment_line_gap
+
     approx_rows = 9
     totals_h = (approx_rows * row_h) + bar_h + 20
-    if y - totals_h < (M_B + 0.35 * inch):
+
+    # reserve enough space for whichever side is taller
+    needed_h = max(payment_h, totals_h)
+    if y - needed_h < (M_B + 0.35 * inch):
         new_page()
 
+    # ---- left payment block ----
+    payment_top = y - 10
+    py = payment_top
+    PAY_TITLE_FS = FS        # 9 pt
+    PAY_BODY_FS = FS_SM      # 8 pt
+
+    for idx, segments in enumerate(payment_render_lines):
+        this_fs = PAY_TITLE_FS if idx == 0 else PAY_BODY_FS
+        _draw_text_inline_segments(c, payment_x0, py, segments, fs=this_fs)
+        py -= payment_line_gap
+
+    # ---- right totals block ----
     def rule(y_line: float):
-        # full width of the totals block
         _hr(c, sx0, sx1, y_line, lw=0.9, col=LIGHT_RULE)
 
     def totals_row(label: str, value: str, bold: bool = False, top_rule: bool = True):
@@ -661,7 +748,6 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     totals_row("Sales Tax Rate", _s(normalized.get("sales_tax_rate")))
     totals_row("Tax Amount", _money(normalized.get("tax_amount")))
 
-    # Orange total bar: full width of totals block
     top = y
     bottom = y - bar_h
     _rect_fill(c, sx0, bottom, (sx1 - sx0), bar_h, ORANGE)
@@ -674,6 +760,10 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
 
     totals_row("Amount Paid", _money(normalized.get("amount_paid")))
     totals_row("Balance", _money(normalized.get("balance")), bold=True)
+
+    # move y below whichever column extends lower
+    payment_bottom = payment_top - payment_h
+    y = min(y, payment_bottom) - 8
 
     c.save()
     pdf_no_footer = buf.getvalue()
