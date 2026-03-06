@@ -52,60 +52,68 @@
               Please review the details below. You can view the quote and then approve or reject it.
             </p>
 
-            <!-- Details + View Quote button -->
-            <table role="presentation" width="100%" style="margin:10px 0 6px 0;">
+            <!-- Details -->
+            <table role="presentation" width="100%" style="margin:10px 0 10px 0;">
               <tr>
                 <td style="width:50%;vertical-align:top;padding-right:10px;">
-
                   {% if property_name %}
                   <div style="margin:0 0 10px 0;">
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Property</div>
                     <div style="font-size:16px;font-weight:700;margin-top:2px;">{{ property_name }}</div>
                   </div>
                   {% endif %}
-
-                  {% if quote_url %}
-                  <table role="presentation"><tr><td>
-                    <a href="{{ quote_url }}" target="_blank" rel="noopener noreferrer"
-                      style="display:inline-block;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 22px;border-radius:10px;">
-                      View Quote
-                    </a>
-                  </td></tr></table>
-                  {% endif %}
-
                 </td>
 
                 <td style="width:50%;vertical-align:top;padding-left:10px;">
-
                   {% if company_name %}
                   <div style="margin:0 0 10px 0;">
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Company</div>
                     <div style="font-size:16px;font-weight:700;margin-top:2px;">{{ company_name }}</div>
                   </div>
                   {% endif %}
-
-                  {# If you want to show something else on the right (optional), add it here. #}
-
                 </td>
               </tr>
             </table>
 
-            <!-- Approve / Reject buttons (replaces Invoice# area) -->
-            {% if approve_url or reject_url %}
+            <!-- Row 1: View Quote / Deficiency Report -->
             <table role="presentation" width="100%" style="margin:14px 0 4px 0;">
               <tr>
-                <td style="vertical-align:top;padding-right:8px;">
-                  {% if approve_url %}
-                  <a href="{{ approve_url }}" target="_blank" rel="noopener noreferrer"
-                     style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;font-weight:800;padding:12px 18px;border-radius:10px;">
-                    ✅ Approved
+                <td style="width:50%;vertical-align:top;padding-right:8px;">
+                  {% if quote_url %}
+                  <a href="{{ quote_url }}" target="_blank" rel="noopener noreferrer"
+                    style="display:inline-block;width:200px;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    View Quote
                   </a>
                   {% endif %}
                 </td>
-                <td style="vertical-align:top;padding-left:8px;">
+
+                <td style="width:50%;vertical-align:top;padding-left:8px;">
+                  {% if deficiency_report_link %}
+                  <a href="{{ deficiency_report_link }}" target="_blank" rel="noopener noreferrer"
+                    style="display:inline-block;width:200px;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    Deficiency Report
+                  </a>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+
+            <!-- Row 2: Approve / Reject -->
+            {% if approve_url or reject_url %}
+            <table role="presentation" width="100%" style="margin:14px 0 4px 0;">
+              <tr>
+                <td style="width:50%;vertical-align:top;padding-right:8px;">
+                  {% if approve_url %}
+                  <a href="{{ approve_url }}" target="_blank" rel="noopener noreferrer"
+                    style="display:inline-block;width:200px;text-align:center;background:#16a34a;color:#fff;text-decoration:none;font-weight:800;padding:12px 0;border-radius:10px;">
+                    ✅ Approve
+                  </a>
+                  {% endif %}
+                </td>
+                <td style="width:50%;vertical-align:top;padding-left:8px;">
                   {% if reject_url %}
                   <a href="{{ reject_url }}" target="_blank" rel="noopener noreferrer"
-                     style="display:inline-block;background:#dc2626;color:#fff;text-decoration:none;font-weight:800;padding:12px 18px;border-radius:10px;">
+                    style="display:inline-block;width:200px;text-align:center;background:#dc2626;color:#fff;text-decoration:none;font-weight:800;padding:12px 0;border-radius:10px;">
                     ❌ Reject
                   </a>
                   {% endif %}

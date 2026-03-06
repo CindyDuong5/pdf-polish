@@ -495,6 +495,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
 class SendEmailIn(BaseModel):
     client_email: Optional[EmailStr] = None
     cc: Optional[List[EmailStr]] = None
+    deficiency_report_link: Optional[str] = None
 
 
 def _is_reviewable_quote(doc_type: str) -> bool:
@@ -605,6 +606,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         if not to_email:
             raise HTTPException(status_code=400, detail="No client email (customer_email is empty)")
 
+        deficiency_report_link = (body.deficiency_report_link or "").strip() or None
         storage = get_storage()
 
         # choose pdf
@@ -678,6 +680,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "quote_url": file_url,
                 "approve_url": approve_url,
                 "reject_url": reject_url,
+                "deficiency_report_link": deficiency_report_link,
                 "now": "",
             }
 
@@ -687,7 +690,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 f"{greeting}\n\n"
                 f"Here is your Quote #{display_quote_number}.\n"
                 f"View Quote: {file_url}\n\n"
-                f"Approve: {approve_url}\n"
+                + (f"Deficiency Report: {deficiency_report_link}\n\n" if deficiency_report_link else "")
+                + f"Approve: {approve_url}\n"
                 f"Reject: {reject_url}\n\n"
                 "Need help? Reply to this email or call 416-305-0704.\n"
             )

@@ -42,6 +42,31 @@ class SendInvoiceEmailIn(BaseModel):
     cc: Optional[List[str]] = None
 
 
+class GetPaymentLinkIn(BaseModel):
+    force_over_limit: bool = False
+
+
+def _parse_money(v) -> float:
+    s = str(v or "").strip()
+    if not s:
+        return 0.0
+    cleaned = "".join(ch for ch in s if ch.isdigit() or ch in ".-")
+    try:
+        return float(cleaned)
+    except Exception:
+        return 0.0
+
+
+def _invoice_total_amount(fields: dict) -> float:
+    if not isinstance(fields, dict):
+        return 0.0
+    for key in ("total", "invoice_total", "amount_due", "balance"):
+        if key in fields:
+            amt = _parse_money(fields.get(key))
+            if amt:
+                return amt
+    return 0.0
+
 def _styled_draft_key_for(doc_id: str) -> str:
     d = datetime.now(timezone.utc).date().isoformat()
     return f"styled_draft/invoices/{d}/{doc_id}.pdf"
@@ -73,6 +98,68 @@ def _best_fields(row: dict) -> dict:
         return uo
     return ex if isinstance(ex, dict) else {}
 
+@router.post("/api/invoices/{doc_id}/payment-link")
+def create_invoice_payment_link(doc_id: str, body: GetPaymentLinkIn = Body(default=GetPaymentLinkIn())):
+    with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT * FROM public.documents WHERE id = :id"),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        row = dict(row)
+        fields = _best_fields(row)
+
+        doc_type = (row.get("doc_type") or "").upper()
+        if "INVOICE" not in doc_type:
+            raise HTTPException(status_code=409, detail=f"Not an invoice document (doc_type={row.get('doc_type')})")
+
+        total_amount = _invoice_total_amount(fields)
+        if total_amount > 5000 and not body.force_over_limit:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Invoice total ${total_amount:,.2f} is over $5,000. Confirmation required."
+            )
+
+        buildops_invoice_id = _safe_get_buildops_invoice_id(fields)
+        if not buildops_invoice_id:
+            raise HTTPException(status_code=400, detail="Missing BuildOps invoice id")
+
+        try:
+            payment_url = get_invoice_payment_link(buildops_invoice_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to get payment link: {e}")
+
+        # save payment_url back into user_overrides / extracted_fields source-of-truth
+        merged_fields = dict(fields)
+        merged_fields["payment_url"] = payment_url
+
+        db.execute(
+            text(
+                """
+                UPDATE public.documents
+                SET
+                    user_overrides = CAST(:fields AS jsonb),
+                    updated_at = now(),
+                    error = null
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id, "fields": json.dumps(merged_fields)},
+        )
+        db.commit()
+
+        return {
+            "ok": True,
+            "doc_id": doc_id,
+            "payment_url": payment_url,
+            "total_amount": total_amount,
+            "forced": bool(body.force_over_limit and total_amount > 5000),
+        }
+    
+
 
 @router.post("/api/invoices/build")
 def build_invoice_from_number(body: BuildInvoiceIn):
@@ -84,17 +171,6 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     normalized = build_invoice_pdf_data_from_number(bo, inv_num)
 
     # Fetch payment link (non-blocking)
-    payment_url = None
-    try:
-        buildops_invoice_id = _safe_get_buildops_invoice_id(normalized)
-        if buildops_invoice_id:
-            payment_url = get_invoice_payment_link(buildops_invoice_id)
-    except Exception:
-        payment_url = None
-
-    if payment_url:
-        normalized["payment_url"] = payment_url
-
     doc_id = str(uuid4())
     storage = get_storage()
 
@@ -168,7 +244,7 @@ def build_invoice_from_number(body: BuildInvoiceIn):
         "invoice_number": inv_num,
         "styled_draft_s3_key": draft_key,
         "url": url,
-        "payment_url": payment_url,
+        "payment_url": normalized.get("payment_url"),
     }
 
 @router.post("/api/documents/{doc_id}/invoice/save-final")
@@ -190,15 +266,6 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
         dt = (doc.get("doc_type") or "").upper()
         if "INVOICE" not in dt:
             raise HTTPException(status_code=409, detail=f"Not an invoice document (doc_type={doc.get('doc_type')})")
-
-    # Keep payment_url if present; if missing, try to refetch (non-blocking)
-    if not fields.get("payment_url"):
-        try:
-            buildops_invoice_id = _safe_get_buildops_invoice_id(fields)
-            if buildops_invoice_id:
-                fields["payment_url"] = get_invoice_payment_link(buildops_invoice_id)
-        except Exception:
-            pass
 
     storage = get_storage()
     logo_path = os.getenv("MAINLINE_LOGO_PATH") or os.getenv("INVOICE_LOGO_PATH")

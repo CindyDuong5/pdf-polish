@@ -3,7 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import InvoiceEditor, { type InvoiceFields } from "../../components/InvoiceEditor";
 import type { DocRow, Links } from "../../types";
-import { getFields, saveFinalInvoice, sendInvoice, getLinks } from "../../api";
+import {
+  getFields,
+  saveFinalInvoice,
+  sendInvoice,
+  getLinks,
+  getInvoicePaymentLink,
+} from "../../api";
 import { recomputeInvoiceTotals } from "./totals";
 
 export default function InvoicePanel(props: {
@@ -13,8 +19,6 @@ export default function InvoicePanel(props: {
   reloadKey: number;
   onRestyle: () => Promise<void>;
   loading: boolean;
-
-  // ✅ parent callback so we can refresh Final after Save
   onLinksUpdated: (links: Links) => void;
 }) {
   const [fields, setFields] = useState<InvoiceFields | null>(null);
@@ -22,6 +26,8 @@ export default function InvoicePanel(props: {
   const [toInput, setToInput] = useState("");
   const [sending, setSending] = useState(false);
   const [savingFinal, setSavingFinal] = useState(false);
+  const [gettingPaymentLink, setGettingPaymentLink] = useState(false);
+  const [toDirty, setToDirty] = useState(false);
 
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -40,12 +46,12 @@ export default function InvoicePanel(props: {
         const computed = next ? recomputeInvoiceTotals(next) : null;
         setFields(computed);
 
-        // default TO email
         const defaultTo =
           (props.selected?.customer_email || "").trim() ||
           (computed?.billClient_email || "").trim() ||
           "";
         setToInput(defaultTo);
+        setToDirty(false);
       } catch {
         if (alive) setFields(null);
       }
@@ -55,6 +61,17 @@ export default function InvoicePanel(props: {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.selectedId]);
+
+  useEffect(() => {
+    if (toDirty) return;
+
+    const nextTo =
+      (fields?.billClient_email || "").trim() ||
+      (props.selected?.customer_email || "").trim() ||
+      "";
+
+    setToInput(nextTo);
+  }, [fields?.billClient_email, props.selected?.customer_email, toDirty]);
 
   const paymentUrl = useMemo(() => {
     return (fields as any)?.payment_url || "";
@@ -67,10 +84,16 @@ export default function InvoicePanel(props: {
       .filter(Boolean);
   }
 
+  function parseMoney(v: any): number {
+    const s = String(v ?? "").replace(/[^0-9.\-]/g, "").trim();
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   async function waitForFinalPdf(docId: string, tries = 15, delayMs = 800) {
     for (let i = 0; i < tries; i++) {
       const links = await getLinks(docId);
-      if (links?.final?.url) return links; // ✅ correct shape
+      if (links?.final?.url) return links;
       await new Promise((r) => setTimeout(r, delayMs));
     }
     return await getLinks(docId);
@@ -85,13 +108,52 @@ export default function InvoicePanel(props: {
       await saveFinalInvoice(props.selectedId, recomputeInvoiceTotals(fields));
       setMsg("Saved Final ✅");
 
-      // ✅ refresh links so Final preview shows
       const updatedLinks = await waitForFinalPdf(props.selectedId);
       if (updatedLinks) props.onLinksUpdated(updatedLinks);
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
       setSavingFinal(false);
+    }
+  }
+
+  async function onGetPaymentLink() {
+    if (!props.selectedId || !fields) return;
+
+    setMsg(null);
+    setErr(null);
+
+    const total = parseMoney((fields as any)?.total);
+    let force = false;
+
+    if (total > 5000) {
+      const ok = window.confirm(
+        `This invoice total is over $5,000 (${(fields as any)?.total || `$${total.toFixed(2)}`}).\n\nDo you still want to generate a payment link?`
+      );
+      if (!ok) return;
+      force = true;
+    }
+
+    setGettingPaymentLink(true);
+    try {
+      const res = await getInvoicePaymentLink(props.selectedId, {
+        force_over_limit: force,
+      });
+
+      setFields((prev) =>
+        prev
+          ? recomputeInvoiceTotals({
+              ...prev,
+              payment_url: res?.payment_url || "",
+            } as InvoiceFields)
+          : prev
+      );
+
+      setMsg("Payment link loaded ✅");
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setGettingPaymentLink(false);
     }
   }
 
@@ -167,7 +229,10 @@ export default function InvoicePanel(props: {
               <input
                 className="input"
                 value={toInput}
-                onChange={(e) => setToInput(e.target.value)}
+                onChange={(e) => {
+                  setToInput(e.target.value);
+                  setToDirty(true);
+                }}
                 placeholder="client@email.com"
               />
             </label>
@@ -185,7 +250,18 @@ export default function InvoicePanel(props: {
             </label>
 
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Payment Link</div>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Payment Link</div>
+
+              <div className="row gap8" style={{ marginBottom: 8 }}>
+                <button
+                  className="btn btnGhost"
+                  onClick={onGetPaymentLink}
+                  disabled={gettingPaymentLink || savingFinal || props.loading || !props.selectedId || !fields}
+                >
+                  {gettingPaymentLink ? "Getting..." : "Get Payment Link"}
+                </button>
+              </div>
+
               {paymentUrl ? (
                 <div className="input" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -196,7 +272,7 @@ export default function InvoicePanel(props: {
                   </a>
                 </div>
               ) : (
-                <div className="mutedSmall">No payment link available (yet).</div>
+                <div className="mutedSmall">No payment link available yet.</div>
               )}
             </div>
 

@@ -52,7 +52,14 @@ export async function saveFinal(docId: string, fields: any) {
 }
 
 // service quote email
-export async function sendEmail(docId: string, payload: { cc?: string[]; client_email?: string }) {
+export async function sendEmail(
+  docId: string,
+  payload: {
+    cc?: string[];
+    client_email?: string;
+    deficiency_report_link?: string;
+  }
+) {
   const res = await fetch(`${API_BASE}/api/documents/${docId}/send-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -80,9 +87,15 @@ export async function lookupInvoiceByNumber(invoiceNumber: string) {
 }
 
 // ✅ NEW: payment link for invoice (optional UX)
-// backend should implement /api/invoices/:docId/payment-link
-export async function getInvoicePaymentLink(docId: string) {
-  return httpJson(`${API_BASE}/api/invoices/${docId}/payment-link`);
+export async function getInvoicePaymentLink(
+  docId: string,
+  payload?: { force_over_limit?: boolean }
+) {
+  return httpJson(`${API_BASE}/api/invoices/${docId}/payment-link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
 }
 
 // quote decision endpoints (existing)

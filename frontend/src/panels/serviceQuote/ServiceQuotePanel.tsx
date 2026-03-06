@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import ServiceQuoteEditor from "../../components/ServiceQuoteEditor";
 import type { DocRow, Links, ServiceQuoteFields } from "../../types";
-import { sendEmail, saveFinal, getFields, getLinks } from "../../api"; // ✅ add getFields
+import { sendEmail, saveFinal, getFields, getLinks } from "../../api";
 import { withComputedTotals } from "./totals";
 
 export default function ServiceQuotePanel(props: {
@@ -17,6 +17,7 @@ export default function ServiceQuotePanel(props: {
 }) {
   const [fields, setFields] = useState<ServiceQuoteFields | null>(null);
   const [ccInput, setCcInput] = useState("");
+  const [deficiencyReportLink, setDeficiencyReportLink] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -27,7 +28,6 @@ export default function ServiceQuotePanel(props: {
 
   const toEmail = props.selected?.customer_email || fields?.client_email || "";
 
-  // ✅ Load fields on doc select (same as InvoicePanel)
   useEffect(() => {
     let alive = true;
 
@@ -62,7 +62,6 @@ export default function ServiceQuotePanel(props: {
     try {
       await saveFinal(props.selectedId, withComputedTotals(fields));
       setMsg("Saved Final ✅");
-      //✅ refresh links so Final URL appears immediately
       const l = await getLinks(props.selectedId);
       props.onLinksUpdated(l);
     } catch (e: any) {
@@ -78,7 +77,13 @@ export default function ServiceQuotePanel(props: {
 
     try {
       const cc = parseCc(ccInput);
-      await sendEmail(props.selectedId, { cc, client_email: toEmail });
+
+      await sendEmail(props.selectedId, {
+        cc,
+        client_email: toEmail,
+        deficiency_report_link: deficiencyReportLink.trim() || undefined,
+      });
+
       setMsg("Email sent ✅");
       setCcInput("");
     } catch (e: any) {
@@ -127,13 +132,24 @@ export default function ServiceQuotePanel(props: {
         <div className="card">
           <PreviewCard title="Final" url={finalUrl} reloadKey={props.reloadKey} />
 
-          {/* Send email */}
           <div style={{ padding: 12, borderTop: "1px solid #eee" }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Send Email</div>
 
             <div className="mutedSmall" style={{ marginBottom: 10 }}>
               To: <b>{toEmail || "(missing client_email)"}</b>
             </div>
+
+            <label style={{ display: "block", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+                Deficiency Report Link (optional)
+              </div>
+              <input
+                className="input"
+                value={deficiencyReportLink}
+                onChange={(e) => setDeficiencyReportLink(e.target.value)}
+                placeholder="Paste deficiency report URL here"
+              />
+            </label>
 
             <label style={{ display: "block", marginBottom: 10 }}>
               <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
