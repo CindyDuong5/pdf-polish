@@ -158,6 +158,16 @@ def _extract_property_name_and_address(property_obj: Optional[Dict[str, Any]]) -
 
     return str(name or "").strip(), lines
 
+def _normalize_summary(summary: Any) -> str:
+    """
+    Keep line breaks from BuildOps, but normalize whitespace safely.
+    """
+    if summary is None:
+        return ""
+    s = str(summary).replace("\r\n", "\n").replace("\r", "\n").strip()
+    return s
+
+
 def map_buildops_invoice_to_pdf_data(
     invoice: Dict[str, Any],
     customer: Optional[Dict[str, Any]] = None,
@@ -211,13 +221,16 @@ def map_buildops_invoice_to_pdf_data(
     due_date = _fmt_date_from_epoch_seconds(invoice.get("dueDate"))
     job_number = str(invoice.get("jobNumber") or "").strip()
 
-    customer_name = str(invoice.get("customerName") or "").strip()
+    customer_name = str(invoice.get("customerName") or bill_client_name or "").strip()
     authorized_by = str(invoice.get("authorizedBy") or "").strip()
     po_number = str(invoice.get("customerProvidedPONumber") or "").strip()
     wo_number = str(invoice.get("customerProvidedWONumber") or "").strip()
 
     nte_val = _to_float(invoice.get("amountNotToExceed"))
     nte = _fmt_money(nte_val) if nte_val else ""
+
+    # ✅ NEW
+    invoice_summary = _normalize_summary(invoice.get("summary"))
 
     # -------------------------
     # ITEMS: labor / parts + adjustments
@@ -319,6 +332,9 @@ def map_buildops_invoice_to_pdf_data(
         "authorized_by": authorized_by,
         "customerProvidedWONumber": wo_number,
         "nte": nte,
+
+        # ✅ NEW
+        "invoice_summary": invoice_summary,
 
         # Tables
         "labor_rows": labor_rows,

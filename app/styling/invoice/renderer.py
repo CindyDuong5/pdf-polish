@@ -277,6 +277,51 @@ def _draw_text_inline_segments(
         cur_x += stringWidth(text, c._fontname, fs)
     c.setFillColor(BLACK)
 
+def _draw_summary_block(
+    c: canvas.Canvas,
+    x0: float,
+    x1: float,
+    y: float,
+    summary_text: str,
+) -> float:
+    """
+    Draw Invoice Summary section.
+    Returns the next y position after the block.
+    """
+    if not (summary_text or "").strip():
+        return y
+
+    _draw_text(c, x0, y, "Invoice Summary", fs=FS_SM, bold=True)
+    y -= 14
+
+    text_w = x1 - x0
+    wrapped_lines: List[str] = []
+
+    # splitlines() preserves the intended new lines from BuildOps
+    for raw_line in (summary_text or "").splitlines():
+        raw_line = raw_line.strip()
+
+        # keep empty line spacing if one exists
+        if not raw_line:
+            wrapped_lines.append("")
+            continue
+
+        wrapped = _wrap_lines(raw_line, "Helvetica", FS_XS, text_w - 8)
+        wrapped_lines.extend(wrapped if wrapped else [""])
+
+    line_gap = 11
+    for line in wrapped_lines:
+        if line == "":
+            y -= 6
+        else:
+            _draw_text(c, x0, y, line, fs=FS_XS)
+            y -= line_gap
+
+    y -= 6
+    _hr(c, x0, x1, y, lw=0.9, col=LIGHT_RULE)
+    y -= 18
+
+    return y
 
 # ---------------- Footer stamping ----------------
 def _make_footer_overlay(page_num: int, page_count: int) -> bytes:
@@ -454,6 +499,24 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
         nonlocal y
         if y - need_h < (M_B + 0.35 * inch):
             new_page()
+
+    # ===== Invoice Summary =====
+    summary_text = _s(normalized.get("invoice_summary")).strip()
+    if summary_text:
+        # estimate space before drawing
+        est_lines: List[str] = []
+        for raw_line in summary_text.splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                est_lines.append("")
+                continue
+            est_lines.extend(_wrap_lines(raw_line, "Helvetica", FS_XS, content_w - 8))
+
+        est_h = 14 + (len(est_lines) * 11) + 20
+        ensure_space(est_h)
+
+        y = _draw_summary_block(c, x0, x1, y, summary_text)
+
 
     # ===== Columns (ONE money column: Price) =====
     def build_cols_shared_fixed() -> tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:

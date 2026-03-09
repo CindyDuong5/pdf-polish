@@ -71,6 +71,9 @@ class InvoiceData:
   customer_wo: str = ""
   nte: str = ""
 
+  # ✅ NEW
+  invoice_summary: str = ""
+
   labor: List[LaborRow] = None
   parts: List[PartRow] = None
   totals: Totals = None

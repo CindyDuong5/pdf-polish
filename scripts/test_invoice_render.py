@@ -46,7 +46,18 @@ def _fill_defaults(normalized: dict) -> dict:
     put("customerProvidedWONumber", "WO-7788")
     put("nte", "$2,500.00")
 
-    
+    put(
+        "invoice_summary",
+        "50% Deposit invoice for proposal 1006\n"
+        "Department name\n"
+        "Sprinkler Install\n"
+        "Primary technician\n"
+        "-\n"
+        "Additional technicians\n"
+        "-\n"
+        "Visit Description\n"
+        "- Design & Installation of sprinkler system for two spray booths."
+    )
     # -------------------------
     # Sample rows (append for testing)
     # -------------------------
