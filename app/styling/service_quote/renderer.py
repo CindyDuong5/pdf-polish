@@ -50,6 +50,7 @@ INFO_TO_TITLE_GAP = 0.55 * inch
 # Title + description
 TITLE_FS = 22
 DESC_FS = 9
+DESC_LINE_H = 13
 TITLE_GAP_BELOW = 0.16 * inch
 DESC_GAP_BELOW = 0.18 * inch
 
@@ -60,8 +61,8 @@ ITEM_PRICE_FS = 10
 ITEM_BULLET_FS = 9
 ITEM_BULLET_LINE_H = 13
 ITEM_BAR_COLOR = colors.HexColor("#EEE8E6")
-ITEM_LIST_GAP_TOP = 14          # space under bar before first bullet
-ITEM_BLOCK_GAP = 10             # space between item blocks (after last bullet)
+ITEM_LIST_GAP_TOP = 14
+ITEM_BLOCK_GAP = 10
 
 # Bullet dot
 BULLET_R = 1.9  # points
@@ -85,20 +86,20 @@ LIGHT_RULE = colors.HexColor("#D9D1CE")
 FOOTER_GRAY = colors.HexColor("#6F6A67")
 
 # Included / exclusions section typography
-P2_TOP_BLANK = 0.20 * inch     # gap before "Included in Quote" when starting a fresh page
+P2_TOP_BLANK = 0.20 * inch
 P2_TITLE_FS = 12
 P2_TEXT_FS = 11
 P2_LINE_H = 18
-P2_AFTER_INCLUDED_GAP = 10     # extra gap after "All Parts & Labor"
+P2_AFTER_INCLUDED_GAP = 10
 
 # Alignment
-RIGHT_PAD = 10  # one shared right edge for ALL prices/totals
+RIGHT_PAD = 10
 
 # Pagination tuning
-CONTENT_BOTTOM = FOOTER_Y + 0.95 * inch   # don't draw content below this
-CONTINUED_TOP_GAP = 0.25 * inch           # gap below header on continued pages
+CONTENT_BOTTOM = FOOTER_Y + 0.95 * inch
+CONTINUED_TOP_GAP = 0.25 * inch
 
-# Conservative space estimates (for pre-pagination decisions)
+# Conservative space estimates
 TOTALS_HEIGHT_EST = 1.25 * inch
 
 
@@ -167,6 +168,29 @@ def _wrap_text(text: str, font: str, size: int, max_w: float) -> List[str]:
     return lines
 
 
+def _wrap_text_preserve_newlines(text: str, font: str, size: int, max_w: float) -> List[str]:
+    """
+    Wrap text but preserve explicit newline breaks from source text.
+    Blank lines are preserved as empty strings.
+    """
+    text = (text or "").replace("\r", "\n")
+    raw_lines = text.split("\n")
+
+    out: List[str] = []
+    for raw in raw_lines:
+        raw = _clean(raw)
+        if not raw:
+            out.append("")
+            continue
+
+        wrapped = _wrap_text(raw, font, size, max_w)
+        if wrapped:
+            out.extend(wrapped)
+        else:
+            out.append("")
+    return out
+
+
 def _split_desc(desc: str) -> List[str]:
     desc = (desc or "").replace("\r", "\n")
     raw = [ln.strip() for ln in desc.split("\n")]
@@ -185,6 +209,13 @@ def _page_spec_from_template(template_pdf: Path) -> PageSpec:
 
 def _vcenter_baseline(bar_top: float, bar_h: float, font_size: float) -> float:
     return bar_top - (bar_h / 2.0) - (font_size * 0.35)
+
+
+def _desc_lines(data: ServiceQuoteData, font_regular: str, ps: PageSpec) -> List[str]:
+    desc = (data.quote_description or "").replace("\r", "\n").strip()
+    if not desc:
+        return []
+    return _wrap_text_preserve_newlines(desc, font_regular, DESC_FS, _content_w(ps))
 
 
 # =========================
@@ -420,13 +451,15 @@ def _draw_title_and_desc_v2(
 
     y = y_top - TITLE_FS - TITLE_GAP_BELOW
 
-    desc = _clean(data.quote_description)
-    if desc:
+    desc_lines = _desc_lines(data, font_regular, ps)
+    if desc_lines:
         c.setFont(font_regular, DESC_FS)
-        max_w = _content_w(ps)
-        for ln in _wrap_text(desc, font_regular, DESC_FS, max_w)[:2]:
-            c.drawString(x0, y, ln)
-            y -= 13
+        for ln in desc_lines:
+            if ln == "":
+                y -= DESC_LINE_H
+            else:
+                c.drawString(x0, y, ln)
+                y -= DESC_LINE_H
         y -= DESC_GAP_BELOW
     else:
         y -= 6
@@ -599,13 +632,10 @@ def _draw_totals_v2(
 
 
 # =========================
-# Included / exclusions section (can be appended after totals)
+# Included / exclusions section
 # =========================
 
 def _included_exclusions_lines(font_regular: str, ps: PageSpec) -> Tuple[str, str, List[str], float]:
-    """
-    Returns (heading1, included_line, exclusions_lines, max_w)
-    """
     x0 = _x0()
     x1 = _x1(ps)
     text_x = x0 + 16
@@ -620,23 +650,14 @@ def _included_exclusions_lines(font_regular: str, ps: PageSpec) -> Tuple[str, st
 
 
 def _estimate_included_exclusions_height(ps: PageSpec, font_regular: str) -> float:
-    """
-    Estimate vertical height needed for the Included/Exclusions section.
-    """
     _, _, exclusions, max_w = _included_exclusions_lines(font_regular, ps)
 
     h = 0.0
-    # "Included in Quote" heading
     h += P2_LINE_H
-    # included bullet line
     h += P2_LINE_H
-    # extra gap after included bullet
     h += P2_AFTER_INCLUDED_GAP
-
-    # "Specific Exclusions" heading
     h += P2_LINE_H
 
-    # each exclusion: wrapped lines
     for ex in exclusions:
         lines = _wrap_text(ex, font_regular, P2_TEXT_FS, max_w)
         h += max(1, len(lines)) * P2_LINE_H
@@ -650,10 +671,6 @@ def _draw_included_exclusions_section_v2(
     y_top: float,
     font_regular: str,
 ) -> float:
-    """
-    Draw the Included/Exclusions section starting at y_top.
-    Returns new y cursor after drawing.
-    """
     x0 = _x0()
     x1 = _x1(ps)
     y = y_top
@@ -664,12 +681,10 @@ def _draw_included_exclusions_section_v2(
 
     c.setFillColor(colors.black)
 
-    # Heading 1
     c.setFont(font_regular, P2_TITLE_FS)
     c.drawString(x0, y, "Included in Quote")
     y -= P2_LINE_H
 
-    # Included bullet
     c.setFont(font_regular, P2_TEXT_FS)
     c.circle(bullet_x, y + 4, BULLET_R, stroke=0, fill=1)
     c.drawString(text_x, y, "All Parts & Labor")
@@ -677,7 +692,6 @@ def _draw_included_exclusions_section_v2(
 
     y -= P2_AFTER_INCLUDED_GAP
 
-    # Heading 2
     c.setFont(font_regular, P2_TITLE_FS)
     c.drawString(x0, y, "Specific Exclusions")
     y -= P2_LINE_H
@@ -761,11 +775,9 @@ def _calc_first_page_items_y(ps: PageSpec, data: ServiceQuoteData, font_regular:
     y_title_top = y_after_info
     y_after_title = y_title_top - TITLE_FS - TITLE_GAP_BELOW
 
-    desc = _clean(data.quote_description)
-    if desc:
-        max_w_desc = _content_w(ps)
-        desc_lines = _wrap_text(desc, font_regular, DESC_FS, max_w_desc)[:2]
-        y_after_desc = y_after_title - (len(desc_lines) * 13) - DESC_GAP_BELOW
+    desc_lines = _desc_lines(data, font_regular, ps)
+    if desc_lines:
+        y_after_desc = y_after_title - (len(desc_lines) * DESC_LINE_H) - DESC_GAP_BELOW
         return y_after_desc
 
     return y_after_title - 6
@@ -815,7 +827,7 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     # --- Pre-calc y starts ---
     first_items_y = _calc_first_page_items_y(ps, data, font_regular)
-    continued_content_y = _calc_header_bottom_y(ps) - CONTINUED_TOP_GAP  # top content start under header for continued pages
+    continued_content_y = _calc_header_bottom_y(ps) - CONTINUED_TOP_GAP
 
     item_pages, _ = _paginate_item_blocks(
         ps,
@@ -837,17 +849,14 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     included_h_est = _estimate_included_exclusions_height(ps, font_regular)
 
-    # --- Pre-check: does Included/Exclusions fit RIGHT AFTER totals on the same page? ---
+    # --- Pre-check: does Included/Exclusions fit right after totals on the same page? ---
     included_need_own_page = False
     if totals_need_own_page:
-        # totals page starts at continued_content_y, then we go down by totals height
         y_after_totals_est = continued_content_y - TOTALS_HEIGHT_EST
-        # we also want a tiny gap before starting the section
         y_after_totals_est -= P2_TOP_BLANK
         if (y_after_totals_est - included_h_est) < CONTENT_BOTTOM:
             included_need_own_page = True
     else:
-        # totals start at y_est (right after last item)
         y_after_totals_est = y_est - TOTALS_HEIGHT_EST
         y_after_totals_est -= P2_TOP_BLANK
         if (y_after_totals_est - included_h_est) < CONTENT_BOTTOM:
@@ -891,8 +900,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
         is_last_items_page = (idx == len(item_pages) - 1)
 
         if is_last_items_page and (not totals_need_own_page):
-            # Totals right after last item
-            # Safety: if totals actually don't fit, push to next page
             if (cur_y - TOTALS_HEIGHT_EST) < CONTENT_BOTTOM:
                 _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
                 c.showPage()
@@ -900,14 +907,11 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
                 cur_y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
                 cur_y = cur_y - CONTINUED_TOP_GAP
-                # now totals are on "totals page"
                 totals_need_own_page = True
-                included_need_own_page = included_need_own_page or True  # conservative
-                # NOTE: total_pages precomputed; this safety case is rare if estimates are sane.
+                included_need_own_page = included_need_own_page or True
 
             cur_y = _draw_totals_v2(c, ps, y_top=cur_y, data=data, font_regular=font_regular, font_bold=font_bold)
 
-            # ✅ NEW: Put Included/Exclusions right after Quote Total if it fits
             y_section_top = cur_y - P2_TOP_BLANK
             if not included_need_own_page and (y_section_top - included_h_est) >= CONTENT_BOTTOM:
                 _draw_included_exclusions_section_v2(c, ps, y_top=y_section_top, font_regular=font_regular)
@@ -917,13 +921,11 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
         page_no += 1
 
     # ---- Totals page (if needed) ----
-    totals_page_cursor_after = None
     if totals_need_own_page:
         y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
-        y = y - CONTINUED_TOP_GAP  # top content start
+        y = y - CONTINUED_TOP_GAP
         totals_page_cursor_after = _draw_totals_v2(c, ps, y_top=y, data=data, font_regular=font_regular, font_bold=font_bold)
 
-        # Try Included/Exclusions right after totals on this totals page (if allowed)
         y_section_top = totals_page_cursor_after - P2_TOP_BLANK
         if not included_need_own_page and (y_section_top - included_h_est) >= CONTENT_BOTTOM:
             _draw_included_exclusions_section_v2(c, ps, y_top=y_section_top, font_regular=font_regular)
@@ -932,7 +934,7 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
         c.showPage()
         page_no += 1
 
-    # ---- Included/Exclusions page (only if it did NOT fit after totals) ----
+    # ---- Included/Exclusions page ----
     if included_need_own_page:
         y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
         y = y - CONTINUED_TOP_GAP

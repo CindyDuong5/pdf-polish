@@ -55,7 +55,6 @@ def _extract_widget_values(reader: PdfReader) -> Dict[str, str]:
         if not annots_ref:
             continue
 
-        # annots_ref might be an IndirectObject -> resolve
         try:
             annots = annots_ref.get_object()
         except Exception:
@@ -73,11 +72,9 @@ def _extract_widget_values(reader: PdfReader) -> Dict[str, str]:
             if not annot:
                 continue
 
-            # Only widgets (form fields)
             if annot.get("/Subtype") != "/Widget":
                 continue
 
-            # Field name can be on the widget itself (/T) or on its parent (/Parent -> /T)
             name: Optional[str] = None
 
             t = annot.get("/T")
@@ -96,7 +93,6 @@ def _extract_widget_values(reader: PdfReader) -> Dict[str, str]:
             if not name:
                 continue
 
-            # Value can be on widget (/V) or parent (/V)
             val = annot.get("/V")
             if val is None:
                 parent_ref = annot.get("/Parent")
@@ -145,6 +141,19 @@ def _print_fields_from_annots(pdf_path: Path) -> None:
             print(f"{name:16} : {values[name]}")
 
 
+def _force_multiline_quote_description() -> str:
+    """
+    Use real newline characters so renderer can prove it preserves them.
+    Also make each line long enough to wrap if needed.
+    """
+    return (
+        "Annual inspection and testing of fire alarm, emergency lighting, and related life safety devices as required by applicable standards.\n"
+        "Any deficiencies found during inspection will be documented in the report and quoted separately if repairs are required.\n"
+        "Pricing includes labour, standard testing procedures, and submission of inspection documentation upon completion.\n"
+        "Access to all required areas must be available at time of service to avoid delays or additional charges."
+    )
+
+
 def main() -> None:
     template_path = _guess_template_path()
     original_path = _guess_original_path()
@@ -161,12 +170,10 @@ def main() -> None:
 
     styler = ServiceQuoteStyler(template_pdf=template_path)
 
-    # ✅ Use your parser output, but DO NOT use the rendered PDF from styler.style()
+    # Parse using your existing parser
     _out_bytes_unused, data = styler.style(original_bytes)
 
-    # ----------------------------
-    # ✅ Patch missing fields here
-    # ----------------------------
+    # Patch missing basic fields
     if not (data.client_name or "").strip():
         data.client_name = "Client Name"
 
@@ -180,24 +187,27 @@ def main() -> None:
         data.company_name = "Company Name"
 
     if not (data.company_address or "").strip():
-        data.company_address = "Address\nCity, Province XXX XXX"
+        data.company_address = "123 Test Street, Toronto, ON M1M 1M1"
 
     if not (data.property_name or "").strip():
         data.property_name = "Property Name"
 
     if not (data.property_address or "").strip():
-        data.property_address = "Address\nCity, Province XXX XXX"
+        data.property_address = "456 Sample Avenue, Toronto, ON M2M 2M2"
 
-    if not (data.quote_description or "").strip():
-        data.quote_description = (
-            "This is a sample quote description to help visually test wrapping and spacing. "
-            "Add more words here to see how it breaks into lines."
-        )
+    # Force a multi-line quote description for visual testing
+    data.quote_description = _force_multiline_quote_description()
 
-    # ✅ Now render using patched data
+    # Optional: ensure quote/date visible for testing
+    if not (data.quote_number or "").strip():
+        data.quote_number = "SQ-TEST-1001"
+
+    if not (data.quote_date or "").strip():
+        data.quote_date = "Mar 09, 2026"
+
     out_bytes = render_service_quote(template_path, data)
 
-    out_path = Path("tmp/service_quote_draft.pdf")
+    out_path = Path("tmp/service_quote_draft_multiline_desc.pdf")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(out_bytes)
 
@@ -213,12 +223,17 @@ def main() -> None:
     print("property_address :", data.property_address)
     print("quote_number     :", data.quote_number)
     print("quote_date       :", data.quote_date)
-    print("quote_description:", (data.quote_description or "")[:140], "...")
+
+    print("quote_description:")
+    for i, ln in enumerate(data.quote_description.split("\n"), start=1):
+        print(f"  line {i}: {ln}")
+
     print("subtotal         :", data.subtotal)
     print("tax              :", data.tax)
     print("total            :", data.total)
 
     _print_fields_from_annots(out_path)
+
 
 if __name__ == "__main__":
     main()
