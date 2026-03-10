@@ -167,6 +167,22 @@ def _normalize_summary(summary: Any) -> str:
     s = str(summary).replace("\r\n", "\n").replace("\r", "\n").strip()
     return s
 
+def _extract_amount_paid(invoice: Dict[str, Any]) -> float:
+    total = 0.0
+    for p in (invoice.get("payments") or []):
+        if not p:
+            continue
+
+        applied = p.get("appliedAmount")
+        payment_amount = p.get("paymentAmount")
+
+        # Best source for invoice-specific paid amount
+        if applied not in (None, ""):
+            total += _to_float(applied)
+        else:
+            total += _to_float(payment_amount)
+
+    return total
 
 def map_buildops_invoice_to_pdf_data(
     invoice: Dict[str, Any],
@@ -307,9 +323,11 @@ def map_buildops_invoice_to_pdf_data(
 
     subtotal_after_discount_fees = subtotal + service_fee_total - discount_for_pdf
 
-    # Payments not wired yet
-    amount_paid = 0.0
-    balance = total_amount - amount_paid
+    # Payments
+    amount_paid = _extract_amount_paid(invoice)
+    balance = round(total_amount - amount_paid, 2)
+    if abs(balance) < 0.005:
+        balance = 0.0
 
     return {
         # Bill To
