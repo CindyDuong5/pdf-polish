@@ -1,6 +1,10 @@
 // frontend/src/components/ServiceQuoteEditor.tsx
 import type { ServiceQuoteFields } from "../types";
 
+function asString(v: string | number | undefined | null): string {
+  return String(v ?? "");
+}
+
 function Field({
   label,
   value,
@@ -8,7 +12,7 @@ function Field({
   readOnly = false,
 }: {
   label: string;
-  value: string;
+  value?: string | number | null;
   onChange?: (v: string) => void;
   readOnly?: boolean;
 }) {
@@ -16,7 +20,7 @@ function Field({
     <label style={{ display: "block", marginBottom: 10 }}>
       <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{label}</div>
       <input
-        value={value || ""}
+        value={asString(value)}
         readOnly={readOnly}
         onChange={(e) => onChange?.(e.target.value)}
         style={{
@@ -38,7 +42,7 @@ function TextArea({
   rows = 4,
 }: {
   label: string;
-  value: string;
+  value?: string | number | null;
   onChange: (v: string) => void;
   rows?: number;
 }) {
@@ -46,7 +50,7 @@ function TextArea({
     <label style={{ display: "block", marginBottom: 10 }}>
       <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{label}</div>
       <textarea
-        value={value || ""}
+        value={asString(value)}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
         style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
@@ -74,6 +78,8 @@ export default function ServiceQuoteEditor({
     onChange({ ...v, [key]: val });
   }
 
+  const items = Array.isArray(v.items) ? v.items : [];
+
   return (
     <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginTop: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -97,13 +103,21 @@ export default function ServiceQuoteEditor({
         <div>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Company</div>
           <Field label="Company Name" value={v.company_name} onChange={(x) => set("company_name", x)} />
-          <TextArea label="Company Address" value={v.company_address} onChange={(x) => set("company_address", x)} />
+          <TextArea
+            label="Company Address"
+            value={v.company_address}
+            onChange={(x) => set("company_address", x)}
+          />
         </div>
 
         <div>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Property</div>
           <Field label="Property Name" value={v.property_name} onChange={(x) => set("property_name", x)} />
-          <TextArea label="Property Address" value={v.property_address} onChange={(x) => set("property_address", x)} />
+          <TextArea
+            label="Property Address"
+            value={v.property_address}
+            onChange={(x) => set("property_address", x)}
+          />
         </div>
       </div>
 
@@ -117,28 +131,28 @@ export default function ServiceQuoteEditor({
       <div style={{ marginTop: 10, fontWeight: 800 }}>Items</div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
-        {(v.items || []).map((it, idx) => (
+        {items.map((it: any, idx: number) => (
           <div key={idx} style={{ border: "1px solid #eee", borderRadius: 10, padding: 10 }}>
             <div style={{ display: "flex", gap: 10 }}>
               <div style={{ flex: 2 }}>
                 <Field
                   label="Item Name"
-                  value={it.name}
+                  value={it?.name}
                   onChange={(x) => {
-                    const items = [...(v.items || [])];
-                    items[idx] = { ...items[idx], name: x };
-                    set("items", items);
+                    const nextItems = [...items];
+                    nextItems[idx] = { ...nextItems[idx], name: x };
+                    set("items", nextItems);
                   }}
                 />
               </div>
               <div style={{ flex: 1 }}>
                 <Field
                   label="Price"
-                  value={it.price}
+                  value={it?.price}
                   onChange={(x) => {
-                    const items = [...(v.items || [])];
-                    items[idx] = { ...items[idx], price: x };
-                    set("items", items);
+                    const nextItems = [...items];
+                    nextItems[idx] = { ...nextItems[idx], price: x };
+                    set("items", nextItems);
                   }}
                 />
               </div>
@@ -146,11 +160,11 @@ export default function ServiceQuoteEditor({
 
             <TextArea
               label="Item Description (bullets or lines)"
-              value={it.description}
+              value={it?.description}
               onChange={(x) => {
-                const items = [...(v.items || [])];
-                items[idx] = { ...items[idx], description: x };
-                set("items", items);
+                const nextItems = [...items];
+                nextItems[idx] = { ...nextItems[idx], description: x };
+                set("items", nextItems);
               }}
               rows={4}
             />
@@ -158,9 +172,9 @@ export default function ServiceQuoteEditor({
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               <button
                 onClick={() => {
-                  const items = [...(v.items || [])];
-                  items.splice(idx, 1);
-                  set("items", items);
+                  const nextItems = [...items];
+                  nextItems.splice(idx, 1);
+                  set("items", nextItems);
                 }}
                 style={{
                   padding: "8px 10px",
@@ -177,7 +191,9 @@ export default function ServiceQuoteEditor({
         ))}
 
         <button
-          onClick={() => set("items", [...(v.items || []), { name: "", price: "", description: "" }])}
+          onClick={() =>
+            set("items", [...items, { name: "", price: "", description: "" }])
+          }
           style={{
             padding: "10px 12px",
             borderRadius: 10,
@@ -191,7 +207,6 @@ export default function ServiceQuoteEditor({
         </button>
       </div>
 
-      {/* Totals: computed, read-only */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
         <Field label="Subtotal" value={v.subtotal} readOnly />
         <Field label="Tax" value={v.tax} readOnly />
@@ -202,7 +217,6 @@ export default function ServiceQuoteEditor({
         Totals are auto-calculated from item prices (HST included).
       </div>
 
-      {/* Bottom action bar (only show if onSave is provided) */}
       {onSave ? (
         <div
           style={{
