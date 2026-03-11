@@ -95,7 +95,6 @@ export async function sendEmail(
   });
 }
 
-// ✅ NEW: invoice send
 export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?: string }) {
   return httpJson(`${API_BASE}/api/documents/${docId}/invoice/send`, {
     method: "POST",
@@ -104,13 +103,11 @@ export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?:
   });
 }
 
-// ✅ NEW: lookup invoice doc by invoice number (optional UX)
 export async function lookupInvoiceByNumber(invoiceNumber: string) {
   const usp = new URLSearchParams({ number: String(invoiceNumber).trim() });
   return httpJson(`${API_BASE}/api/invoices/lookup?${usp.toString()}`);
 }
 
-// ✅ NEW: payment link for invoice (optional UX)
 export async function getInvoicePaymentLink(
   docId: string,
   payload?: { force_over_limit?: boolean }
@@ -122,7 +119,6 @@ export async function getInvoicePaymentLink(
   });
 }
 
-// quote decision endpoints (existing)
 export async function acceptQuote(
   docId: string,
   payload: { token: string; quote_po_number?: string | null; quote_note?: string | null }
@@ -161,4 +157,18 @@ export async function saveFinalInvoice(docId: string, fields: any) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fields }),
   });
+}
+
+export function friendlyErrorMessage(e: any): string {
+  const msg = e?.message || String(e) || "Something went wrong.";
+
+  if (msg.includes("replaced by a newer version")) {
+    return "This document has been replaced by a newer version. Please reopen the latest one.";
+  }
+
+  if (msg.includes("Please use the invoice send endpoint for invoices")) {
+    return "This invoice must be sent from the invoice send flow.";
+  }
+
+  return msg;
 }

@@ -67,6 +67,7 @@ def _invoice_total_amount(fields: dict) -> float:
                 return amt
     return 0.0
 
+
 def _styled_draft_key_for(doc_id: str) -> str:
     d = datetime.now(timezone.utc).date().isoformat()
     return f"styled_draft/invoices/{d}/{doc_id}.pdf"
@@ -76,6 +77,7 @@ def _final_key_for(doc_id: str) -> str:
     d = datetime.now(timezone.utc).date().isoformat()
     return f"final/invoices/{d}/{doc_id}.pdf"
 
+
 def _property_address_text(fields: dict) -> str | None:
     lines = fields.get("property_address_lines") or []
     joined = "\n".join([str(x).strip() for x in lines if str(x).strip()])
@@ -83,7 +85,6 @@ def _property_address_text(fields: dict) -> str | None:
 
 
 def _safe_get_buildops_invoice_id(fields: dict) -> str | None:
-    # prefer explicit fields
     for k in ("buildops_invoice_id", "invoice_id", "id"):
         v = fields.get(k)
         if isinstance(v, str) and v.strip():
@@ -98,8 +99,55 @@ def _best_fields(row: dict) -> dict:
         return uo
     return ex if isinstance(ex, dict) else {}
 
+
+def _find_existing_active_invoice(db, buildops_invoice_id: str | None, invoice_number: str | None):
+    if buildops_invoice_id:
+        row = db.execute(
+            text(
+                """
+                SELECT *
+                FROM public.documents
+                WHERE doc_type = 'INVOICE'
+                  AND status <> 'REPLACED'
+                  AND (
+                    extracted_fields->>'buildops_invoice_id' = :boid
+                    OR user_overrides->>'buildops_invoice_id' = :boid
+                  )
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"boid": buildops_invoice_id},
+        ).mappings().first()
+        if row:
+            return dict(row)
+
+    if invoice_number:
+        row = db.execute(
+            text(
+                """
+                SELECT *
+                FROM public.documents
+                WHERE doc_type = 'INVOICE'
+                  AND status <> 'REPLACED'
+                  AND invoice_number = :invoice_number
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"invoice_number": invoice_number},
+        ).mappings().first()
+        if row:
+            return dict(row)
+
+    return None
+
+
 @router.post("/api/invoices/{doc_id}/payment-link")
-def create_invoice_payment_link(doc_id: str, body: GetPaymentLinkIn = Body(default=GetPaymentLinkIn())):
+def create_invoice_payment_link(
+    doc_id: str,
+    body: GetPaymentLinkIn = Body(default=GetPaymentLinkIn()),
+):
     with SessionLocal() as db:
         row = db.execute(
             text("SELECT * FROM public.documents WHERE id = :id"),
@@ -110,17 +158,27 @@ def create_invoice_payment_link(doc_id: str, body: GetPaymentLinkIn = Body(defau
             raise HTTPException(status_code=404, detail="Document not found")
 
         row = dict(row)
+
+        if (row.get("status") or "").upper() == "REPLACED":
+            raise HTTPException(
+                status_code=409,
+                detail="This invoice has been replaced by a newer version.",
+            )
+
         fields = _best_fields(row)
 
         doc_type = (row.get("doc_type") or "").upper()
         if "INVOICE" not in doc_type:
-            raise HTTPException(status_code=409, detail=f"Not an invoice document (doc_type={row.get('doc_type')})")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Not an invoice document (doc_type={row.get('doc_type')})",
+            )
 
         total_amount = _invoice_total_amount(fields)
         if total_amount > 5000 and not body.force_over_limit:
             raise HTTPException(
                 status_code=409,
-                detail=f"Invoice total ${total_amount:,.2f} is over $5,000. Confirmation required."
+                detail=f"Invoice total ${total_amount:,.2f} is over $5,000. Confirmation required.",
             )
 
         buildops_invoice_id = _safe_get_buildops_invoice_id(fields)
@@ -132,7 +190,6 @@ def create_invoice_payment_link(doc_id: str, body: GetPaymentLinkIn = Body(defau
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to get payment link: {e}")
 
-        # save payment_url back into user_overrides / extracted_fields source-of-truth
         merged_fields = dict(fields)
         merged_fields["payment_url"] = payment_url
 
@@ -158,7 +215,6 @@ def create_invoice_payment_link(doc_id: str, body: GetPaymentLinkIn = Body(defau
             "total_amount": total_amount,
             "forced": bool(body.force_over_limit and total_amount > 5000),
         }
-    
 
 
 @router.post("/api/invoices/build")
@@ -170,7 +226,9 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     bo = BuildOpsClient()
     normalized = build_invoice_pdf_data_from_number(bo, inv_num)
 
-    # Fetch payment link (non-blocking)
+    normalized_invoice_number = (normalized.get("invoice_number") or inv_num or "").strip()
+    buildops_invoice_id = _safe_get_buildops_invoice_id(normalized)
+
     doc_id = str(uuid4())
     storage = get_storage()
 
@@ -185,6 +243,8 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     prop_addr = _property_address_text(normalized)
 
     with SessionLocal() as db:
+        old_row = _find_existing_active_invoice(db, buildops_invoice_id, normalized_invoice_number)
+
         db.execute(
             text(
                 """
@@ -223,29 +283,45 @@ def build_invoice_from_number(body: BuildInvoiceIn):
                 "customer_name": bill_name,
                 "customer_email": bill_email,
                 "property_address": prop_addr,
-                "invoice_number": inv_num,
+                "invoice_number": normalized_invoice_number,
                 "original_s3_key": draft_key,
                 "styled_draft_s3_key": draft_key,
                 "extracted_fields": json.dumps(normalized),
             },
         )
+
+        if old_row:
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET
+                        status = 'REPLACED',
+                        updated_at = now()
+                    WHERE id = :old_id
+                    """
+                ),
+                {"old_id": old_row["id"]},
+            )
+
         db.commit()
 
     url = storage.presign_get_url(
         key=draft_key,
         expires_seconds=3600,
-        download_filename=f"INVOICE_{inv_num}.pdf",
+        download_filename=f"INVOICE_{normalized_invoice_number}.pdf",
         inline=True,
     )
 
     return {
         "ok": True,
         "doc_id": doc_id,
-        "invoice_number": inv_num,
+        "invoice_number": normalized_invoice_number,
         "styled_draft_s3_key": draft_key,
         "url": url,
         "payment_url": normalized.get("payment_url"),
     }
+
 
 @router.post("/api/documents/{doc_id}/invoice/save-final")
 def save_final_invoice(doc_id: str, body: dict = Body(...)):
@@ -253,10 +329,9 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     if not isinstance(fields, dict):
         raise HTTPException(status_code=400, detail="Missing fields")
 
-    # ✅ Guard: only invoices allowed
     with SessionLocal() as db:
         doc = db.execute(
-            text("SELECT id, doc_type, customer_email FROM public.documents WHERE id=:id"),
+            text("SELECT id, doc_type, customer_email, status FROM public.documents WHERE id=:id"),
             {"id": doc_id},
         ).mappings().first()
 
@@ -265,7 +340,16 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
 
         dt = (doc.get("doc_type") or "").upper()
         if "INVOICE" not in dt:
-            raise HTTPException(status_code=409, detail=f"Not an invoice document (doc_type={doc.get('doc_type')})")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Not an invoice document (doc_type={doc.get('doc_type')})",
+            )
+
+        if (doc.get("status") or "").upper() == "REPLACED":
+            raise HTTPException(
+                status_code=409,
+                detail="This invoice has been replaced by a newer version.",
+            )
 
     storage = get_storage()
     logo_path = os.getenv("MAINLINE_LOGO_PATH") or os.getenv("INVOICE_LOGO_PATH")
@@ -323,19 +407,27 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             raise HTTPException(status_code=404, detail="Document not found")
 
         row = dict(row)
+
+        if (row.get("status") or "").upper() == "REPLACED":
+            raise HTTPException(
+                status_code=409,
+                detail="This invoice has been replaced by a newer version.",
+            )
+
         fields = _best_fields(row)
 
         final_key = row.get("final_s3_key")
         if not final_key:
-            raise HTTPException(status_code=400, detail="Invoice not finalized yet. Please Save Final first.")
+            raise HTTPException(
+                status_code=400,
+                detail="Invoice not finalized yet. Please Save Final first.",
+            )
 
         invoice_number = (row.get("invoice_number") or fields.get("invoice_number") or "").strip()
         customer_name = (row.get("customer_name") or fields.get("billClient_name") or "Customer").strip()
         property_address = row.get("property_address") or _property_address_text(fields)
-
         payment_url = fields.get("payment_url")
 
-        # Normalize To
         to_email = (
             (body.to_email or body.to)
             or row.get("customer_email")
@@ -343,9 +435,11 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             or ""
         ).strip()
         if not to_email:
-            raise HTTPException(status_code=400, detail="Missing to_email (and no customer_email on document)")
+            raise HTTPException(
+                status_code=400,
+                detail="Missing to_email (and no customer_email on document)",
+            )
 
-        # Normalize CC
         cc = body.cc_emails or body.cc or []
         cc = [e.strip() for e in cc if isinstance(e, str) and e.strip()]
 
@@ -356,13 +450,15 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             inline=True,
         )
 
-        # Download PDF bytes for attachment
         try:
             r = requests.get(view_url, timeout=60)
             r.raise_for_status()
             pdf_bytes = r.content
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to download PDF for attachment: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to download PDF for attachment: {e}",
+            )
 
         kind = email_kind_for("INVOICE")
         tpl = template_for_kind(kind)
@@ -383,7 +479,6 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             f"Pay by Credit Card: {payment_url}\n" if payment_url else ""
         )
 
-        # ✅ attachments tuple is OK (Sequence)
         send_email_brevo_smtp(
             to_email=to_email,
             subject=subject,
@@ -417,4 +512,10 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         )
         db.commit()
 
-    return {"ok": True, "to": to_email, "cc": cc, "view_url": view_url, "payment_url": payment_url}
+    return {
+        "ok": True,
+        "to": to_email,
+        "cc": cc,
+        "view_url": view_url,
+        "payment_url": payment_url,
+    }

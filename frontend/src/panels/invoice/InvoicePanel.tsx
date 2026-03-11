@@ -9,6 +9,7 @@ import {
   sendInvoice,
   getLinks,
   getInvoicePaymentLink,
+  friendlyErrorMessage,
 } from "../../api";
 import { recomputeInvoiceTotals } from "./totals";
 
@@ -37,8 +38,11 @@ export default function InvoicePanel(props: {
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       try {
+        setErr(null);
+
         const data = await getFields(props.selectedId);
         const next = (data?.draft || data?.final || null) as InvoiceFields | null;
         if (!alive) return;
@@ -47,15 +51,19 @@ export default function InvoicePanel(props: {
         setFields(computed);
 
         const defaultTo =
-          (props.selected?.customer_email || "").trim() ||
           (computed?.billClient_email || "").trim() ||
+          (props.selected?.customer_email || "").trim() ||
           "";
+
         setToInput(defaultTo);
         setToDirty(false);
-      } catch {
-        if (alive) setFields(null);
+      } catch (e: any) {
+        if (!alive) return;
+        setFields(null);
+        setErr(friendlyErrorMessage(e));
       }
     })();
+
     return () => {
       alive = false;
     };
@@ -104,6 +112,7 @@ export default function InvoicePanel(props: {
     setMsg(null);
     setErr(null);
     setSavingFinal(true);
+
     try {
       await saveFinalInvoice(props.selectedId, recomputeInvoiceTotals(fields));
       setMsg("Saved Final ✅");
@@ -111,7 +120,7 @@ export default function InvoicePanel(props: {
       const updatedLinks = await waitForFinalPdf(props.selectedId);
       if (updatedLinks) props.onLinksUpdated(updatedLinks);
     } catch (e: any) {
-      setErr(e?.message || String(e));
+      setErr(friendlyErrorMessage(e));
     } finally {
       setSavingFinal(false);
     }
@@ -151,7 +160,7 @@ export default function InvoicePanel(props: {
 
       setMsg("Payment link loaded ✅");
     } catch (e: any) {
-      setErr(e?.message || String(e));
+      setErr(friendlyErrorMessage(e));
     } finally {
       setGettingPaymentLink(false);
     }
@@ -175,7 +184,7 @@ export default function InvoicePanel(props: {
       await sendInvoice(props.selectedId, { to, cc });
       setMsg("Invoice email sent ✅");
     } catch (e: any) {
-      setErr(e?.message || String(e));
+      setErr(friendlyErrorMessage(e));
     } finally {
       setSending(false);
     }
@@ -212,7 +221,7 @@ export default function InvoicePanel(props: {
             />
           ) : (
             <div className="mutedSmall" style={{ padding: 12 }}>
-              No editable fields yet. Click <b>Restyle</b> to generate draft + fields.
+              No editable fields available for this invoice.
             </div>
           )}
         </div>

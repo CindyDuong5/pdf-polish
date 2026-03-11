@@ -9,11 +9,11 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
-from app.db import SessionLocal  # ✅ reuse shared session
 
+from app.db import SessionLocal
 from app.email.smtp_sender import EmailAttachment, send_email_brevo_smtp
 from app.email.template_router import build_subject, email_kind_for, render_html, template_for_kind
-from app.security.quote_response_token import make_token, verify_token  # ✅ use your existing JWT
+from app.security.quote_response_token import make_token, verify_token
 from app.services.document_fields import get_fields, set_final
 from app.services.keys import final_key_for
 from app.services.pdf_stamp import stamp_pdf
@@ -26,10 +26,8 @@ from app.services.payment_link import get_invoice_payment_link
 
 app = FastAPI(title="PDF Polish API")
 
-# Include the invoice router
 app.include_router(invoice_router)
 
-# CORS for local frontend dev (React/Vite/etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -53,6 +51,22 @@ def root():
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+def _is_replace_blocked_doc(doc_type: str | None) -> bool:
+    dt = (doc_type or "").upper()
+    return ("INVOICE" in dt) or ("SERVICE_QUOTE" in dt) or ("PROJECT_QUOTE" in dt) or ("QUOTE" in dt)
+
+
+def _block_replaced_document(
+    row: dict,
+    detail: str = "This document has been replaced by a newer version.",
+):
+    dt = (row.get("doc_type") or "").upper()
+    status = (row.get("status") or "").upper()
+
+    if _is_replace_blocked_doc(dt) and status == "REPLACED":
+        raise HTTPException(status_code=409, detail=detail)
 
 
 @app.get("/api/documents")
@@ -125,6 +139,7 @@ def list_documents(
         rows = db.execute(sql, params).mappings().all()
         return {"items": [dict(r) for r in rows]}
 
+
 @app.get("/api/documents/{doc_id}")
 def get_document(doc_id: str):
     sql = text("SELECT * FROM public.documents WHERE id = :id")
@@ -132,7 +147,10 @@ def get_document(doc_id: str):
         row = db.execute(sql, {"id": doc_id}).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
-        return dict(row)
+
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+        return rowd
 
 
 @app.get("/api/documents/{doc_id}/presign")
@@ -145,6 +163,7 @@ def presign_document(
         """
         SELECT
           doc_type,
+          status,
           invoice_number,
           quote_number,
           job_report_number,
@@ -161,19 +180,22 @@ def presign_document(
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+
         if which == "original":
-            key = row["original_s3_key"]
+            key = rowd["original_s3_key"]
         elif which == "final":
-            key = row["final_s3_key"]
+            key = rowd["final_s3_key"]
         else:
-            key = row["styled_draft_s3_key"]
+            key = rowd["styled_draft_s3_key"]
 
         if not key:
             raise HTTPException(status_code=400, detail=f"No {which} file available yet")
 
         storage = get_storage()
-        label = row["invoice_number"] or row["quote_number"] or row["job_report_number"] or row["id"]
-        filename = f"{row['doc_type']}_{label}.pdf"
+        label = rowd["invoice_number"] or rowd["quote_number"] or rowd["job_report_number"] or doc_id
+        filename = f"{rowd['doc_type']}_{label}.pdf"
 
         url = storage.presign_get_url(
             key=key,
@@ -191,6 +213,7 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
         SELECT
           id,
           doc_type,
+          status,
           invoice_number,
           quote_number,
           job_report_number,
@@ -207,9 +230,12 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+
         storage = get_storage()
-        label = row["invoice_number"] or row["quote_number"] or row["job_report_number"] or row["id"]
-        filename = f"{row['doc_type']}_{label}.pdf"
+        label = rowd["invoice_number"] or rowd["quote_number"] or rowd["job_report_number"] or rowd["id"]
+        filename = f"{rowd['doc_type']}_{label}.pdf"
 
         def url_for(key: str | None) -> str | None:
             if not key:
@@ -222,18 +248,15 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
             )
 
         return {
-            "id": row["id"],
-            "doc_type": row["doc_type"],
+            "id": rowd["id"],
+            "doc_type": rowd["doc_type"],
             "filename": filename,
-            "original": {"key": row["original_s3_key"], "url": url_for(row["original_s3_key"])},
-            "styled_draft": {"key": row["styled_draft_s3_key"], "url": url_for(row["styled_draft_s3_key"])},
-            "final": {"key": row["final_s3_key"], "url": url_for(row["final_s3_key"])},
+            "original": {"key": rowd["original_s3_key"], "url": url_for(rowd["original_s3_key"])},
+            "styled_draft": {"key": rowd["styled_draft_s3_key"], "url": url_for(rowd["styled_draft_s3_key"])},
+            "final": {"key": rowd["final_s3_key"], "url": url_for(rowd["final_s3_key"])},
         }
 
 
-# ------------------------------------------------------------
-# Existing: Stamp-based finalize (optional debug tool)
-# ------------------------------------------------------------
 @app.post("/api/documents/{doc_id}/finalize")
 def finalize_document(
     doc_id: str,
@@ -247,7 +270,7 @@ def finalize_document(
         row = db.execute(
             text(
                 """
-                SELECT id, original_s3_key, styled_draft_s3_key, final_s3_key
+                SELECT id, doc_type, status, original_s3_key, styled_draft_s3_key, final_s3_key
                 FROM public.documents
                 WHERE id = :id
                 """
@@ -258,15 +281,18 @@ def finalize_document(
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
-        if row["final_s3_key"] and not force:
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+
+        if rowd["final_s3_key"] and not force:
             return {
                 "ok": True,
                 "note": "Final already exists (use force=true to regenerate).",
-                "final_s3_key": row["final_s3_key"],
+                "final_s3_key": rowd["final_s3_key"],
             }
 
-        original_key = row["original_s3_key"]
-        draft_key = row["styled_draft_s3_key"]
+        original_key = rowd["original_s3_key"]
+        draft_key = rowd["styled_draft_s3_key"]
         if not original_key:
             raise HTTPException(status_code=400, detail="Document missing original_s3_key")
 
@@ -322,12 +348,18 @@ def finalize_document(
             raise
 
 
-# ------------------------------------------------------------
-# Draft creation (restyle)
-# ------------------------------------------------------------
 @app.post("/api/documents/{doc_id}/restyle")
 def restyle_document(doc_id: str):
     with SessionLocal() as db:
+        row = db.execute(
+            text("SELECT id, doc_type, status FROM public.documents WHERE id = :id"),
+            {"id": doc_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        _block_replaced_document(dict(row))
+
         result = ensure_draft(db, doc_id, force=True)
         return {
             "ok": True,
@@ -336,22 +368,63 @@ def restyle_document(doc_id: str):
             "reused_existing": result["reused_existing"],
         }
 
-# ------------------------------------------------------------
-# Fields: editable JSON (draft/final)
-# ------------------------------------------------------------
 
 @app.get("/api/documents/{doc_id}/fields")
 def get_document_fields(doc_id: str):
     with SessionLocal() as db:
+        docrow = db.execute(
+            text(
+                """
+                SELECT id, doc_type, status
+                FROM public.documents
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not docrow:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        _block_replaced_document(dict(docrow))
+
         row = get_fields(db, doc_id)
         effective_doc_id = doc_id
 
         if not row:
             result = ensure_draft(db, doc_id, force=False)
             effective_doc_id = result["doc_id"]
+
+            docrow2 = db.execute(
+                text(
+                    """
+                    SELECT id, doc_type, status
+                    FROM public.documents
+                    WHERE id = :id
+                    """
+                ),
+                {"id": effective_doc_id},
+            ).mappings().first()
+            if docrow2:
+                _block_replaced_document(dict(docrow2))
+
             row = get_fields(db, effective_doc_id)
 
         if row:
+            rdoc = db.execute(
+                text(
+                    """
+                    SELECT doc_type, status
+                    FROM public.documents
+                    WHERE id = :id
+                    """
+                ),
+                {"id": effective_doc_id},
+            ).mappings().first()
+
+            if rdoc:
+                _block_replaced_document(dict(rdoc))
+
             return {
                 "doc_id": effective_doc_id,
                 "draft": row.get("draft_json"),
@@ -362,7 +435,7 @@ def get_document_fields(doc_id: str):
         r2 = db.execute(
             text(
                 """
-                SELECT doc_type, extracted_fields, user_overrides
+                SELECT doc_type, status, extracted_fields, user_overrides
                 FROM public.documents
                 WHERE id = :id
                 """
@@ -373,8 +446,11 @@ def get_document_fields(doc_id: str):
         if not r2:
             raise HTTPException(status_code=404, detail="Not found")
 
-        extracted = r2.get("extracted_fields")
-        overrides = r2.get("user_overrides")
+        r2d = dict(r2)
+        _block_replaced_document(r2d)
+
+        extracted = r2d.get("extracted_fields")
+        overrides = r2d.get("user_overrides")
 
         if extracted or overrides:
             return {
@@ -382,14 +458,11 @@ def get_document_fields(doc_id: str):
                 "draft": extracted,
                 "final": overrides,
                 "source": "documents_json",
-                "doc_type": r2.get("doc_type"),
+                "doc_type": r2d.get("doc_type"),
             }
 
         raise HTTPException(status_code=404, detail="No fields available")
-    
-# ------------------------------------------------------------
-# ✅ Save Final from edited fields (Service Quote)
-# ------------------------------------------------------------
+
 
 @app.post("/api/documents/{doc_id}/save-final")
 def save_final(doc_id: str, body: dict = Body(...)):
@@ -402,21 +475,24 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT id, doc_type, original_s3_key FROM public.documents WHERE id=:id"),
+            text("SELECT id, doc_type, status, original_s3_key FROM public.documents WHERE id=:id"),
             {"id": doc_id},
         ).mappings().first()
 
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
-        doc_type = row.get("doc_type") or ""
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+
+        doc_type = rowd.get("doc_type") or ""
         dt = doc_type.upper()
 
         if ("SERVICE_QUOTE" not in dt) and ("PROJECT_QUOTE" not in dt) and ("QUOTE" not in dt):
             raise HTTPException(status_code=409, detail=f"Not a quote document (doc_type={doc_type})")
 
         target_doc_id = str(doc_id)
-        original_key = row["original_s3_key"]
+        original_key = rowd["original_s3_key"]
         if not original_key:
             raise HTTPException(status_code=400, detail="Missing original_s3_key")
 
@@ -524,18 +600,11 @@ class SendEmailIn(BaseModel):
 
 
 def _is_reviewable_quote(doc_type: str) -> bool:
-    """
-    Only Service Quote + Project Quote get Approve/Reject buttons.
-    Adjust these checks to match your exact doc_type values.
-    """
     dt = (doc_type or "").upper()
     return ("SERVICE_QUOTE" in dt) or ("PROJECT_QUOTE" in dt)
 
+
 def _extract_quote_info(row: dict) -> tuple[str | None, str | None, str | None]:
-    """
-    Returns (quote_number, property_name, company_name)
-    Priority: document_fields.final_json -> documents columns
-    """
     final_json = row.get("final_json") or {}
 
     quote_number = None
@@ -547,7 +616,6 @@ def _extract_quote_info(row: dict) -> tuple[str | None, str | None, str | None]:
         property_name = (final_json.get("property_name") or "").strip() or None
         company_name = (final_json.get("company_name") or "").strip() or None
 
-    # fallbacks
     quote_number = quote_number or (str(row.get("quote_number") or "").strip() or None)
     property_name = property_name or (str(row.get("property_address") or "").strip() or None)
 
@@ -555,16 +623,10 @@ def _extract_quote_info(row: dict) -> tuple[str | None, str | None, str | None]:
 
 
 def _display_quote_label(quote_number: str | None, doc_id: str) -> str:
-    """
-    What to display publicly in UI/email subject.
-    """
     return (quote_number or "").strip() or doc_id[:8]
 
+
 def _as_dict_maybe(v):
-    """
-    Supabase/SQLAlchemy can return jsonb as dict already, or sometimes as a JSON string.
-    Normalize to dict.
-    """
     if v is None:
         return {}
     if isinstance(v, dict):
@@ -583,14 +645,12 @@ def _as_dict_maybe(v):
 
 
 def _get_buildops_invoice_id(rowd: dict) -> str | None:
-    """
-    Prefer user_overrides first (if user edited), else extracted_fields.
-    """
     overrides = _as_dict_maybe(rowd.get("user_overrides"))
     extracted = _as_dict_maybe(rowd.get("extracted_fields"))
 
     inv_id = (overrides.get("buildops_invoice_id") or extracted.get("buildops_invoice_id") or "").strip()
     return inv_id or None
+
 
 @app.post("/api/documents/{doc_id}/send-email")
 def send_email_any(doc_id: str, body: SendEmailIn):
@@ -599,6 +659,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         SELECT
           d.id,
           d.doc_type,
+          d.status,
           d.customer_name,
           d.customer_email,
           d.property_address,
@@ -624,8 +685,16 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             raise HTTPException(status_code=404, detail="Not found")
 
         rowd = dict(row)
+        _block_replaced_document(rowd)
+
         real_doc_id = str(doc_id)
         doc_type = rowd.get("doc_type") or ""
+
+        if "INVOICE" in (doc_type or "").upper():
+            raise HTTPException(
+                status_code=409,
+                detail="Please use the invoice send endpoint for invoices.",
+            )
 
         to_email = str(body.client_email or rowd.get("customer_email") or "").strip()
         if not to_email:
@@ -792,20 +861,19 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "payment_url": payment_url if ("INVOICE" in (doc_type or "").upper()) else None,
             "quote_number": display_quote_number if reviewable else None,
         }
-      
-# --- Review actions: Accept / Reject (client approval) -----------------
+
 
 class AcceptIn(BaseModel):
     quote_po_number: Optional[str] = None
     quote_note: Optional[str] = None
     send_email: bool = False
     cc: Optional[List[EmailStr]] = None
-    token: str  # ✅ required
+    token: str
 
 
 class RejectIn(BaseModel):
     reason: Optional[str] = None
-    token: str  # ✅ required
+    token: str
 
 
 def _notify_support_approved(quote_number: str, po: str | None, note: str | None):
@@ -878,29 +946,26 @@ def accept_document(doc_id: str, body: AcceptIn):
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
-        if not _is_reviewable_quote(row.get("doc_type") or ""):
-            raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={row.get('doc_type')}")
+        rowd = dict(row)
+        _block_replaced_document(rowd)
 
-        # Compute label once (for message + support email)
-        quote_number, _, _ = _extract_quote_info(dict(row))
+        if not _is_reviewable_quote(rowd.get("doc_type") or ""):
+            raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={rowd.get('doc_type')}")
+
+        quote_number, _, _ = _extract_quote_info(rowd)
         quote_label = _display_quote_label(quote_number, doc_id)
 
-        status = (row.get("status") or "").upper()
+        status = (rowd.get("status") or "").upper()
 
-        # ✅ Idempotency
         if status == "APPROVED":
-            # Already approved -> OK, no re-email, no DB update
             return {"ok": True, "id": doc_id, "status": "APPROVED", "message": "Already approved."}
 
-        # ✅ Conflict protection (old link)
         if status == "REJECTED":
             raise HTTPException(status_code=409, detail=f"Quote #{quote_label} was already rejected.")
 
-        # ✅ Only allow approve from SENT (and optionally FINALIZED)
         if status not in ("SENT", "FINALIZED"):
-            raise HTTPException(status_code=409, detail=f"Cannot approve when status={row['status']}")
+            raise HTTPException(status_code=409, detail=f"Cannot approve when status={rowd['status']}")
 
-        # Normal approve path
         db.execute(
             text(
                 """
@@ -919,7 +984,6 @@ def accept_document(doc_id: str, body: AcceptIn):
         )
         db.commit()
 
-    # ✅ Notify support only on the state change (not on idempotent hits)
     _notify_support_approved(quote_label, body.quote_po_number, body.quote_note)
 
     if body.send_email:
@@ -956,28 +1020,26 @@ def reject_document(doc_id: str, body: RejectIn):
         if not row:
             raise HTTPException(status_code=404, detail="Not found")
 
-        if not _is_reviewable_quote(row.get("doc_type") or ""):
-            raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={row.get('doc_type')}")
+        rowd = dict(row)
+        _block_replaced_document(rowd)
 
-        # Compute label once
-        quote_number, _, _ = _extract_quote_info(dict(row))
+        if not _is_reviewable_quote(rowd.get("doc_type") or ""):
+            raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={rowd.get('doc_type')}")
+
+        quote_number, _, _ = _extract_quote_info(rowd)
         quote_label = _display_quote_label(quote_number, doc_id)
 
-        status = (row.get("status") or "").upper()
+        status = (rowd.get("status") or "").upper()
 
-        # ✅ Idempotency
         if status == "REJECTED":
             return {"ok": True, "id": doc_id, "status": "REJECTED", "message": "Already rejected."}
 
-        # ✅ Conflict protection (old link)
         if status == "APPROVED":
             raise HTTPException(status_code=409, detail=f"Quote #{quote_label} was already approved.")
 
-        # ✅ Only allow reject from SENT (and optionally FINALIZED)
         if status not in ("SENT", "FINALIZED"):
-            raise HTTPException(status_code=409, detail=f"Cannot reject when status={row['status']}")
+            raise HTTPException(status_code=409, detail=f"Cannot reject when status={rowd['status']}")
 
-        # Normal reject path
         db.execute(
             text(
                 """
@@ -1000,23 +1062,21 @@ def reject_document(doc_id: str, body: RejectIn):
 
 @app.get("/api/documents/{doc_id}/quote-decision")
 def get_quote_decision(doc_id: str, token: str):
-    # 1) Validate token (must match doc_id)
     try:
-        claims = verify_token(token)  # ✅ you already have this
+        claims = verify_token(token)
     except Exception:
-        # jwt lib will raise on expired/invalid; return clean 401
         raise HTTPException(status_code=401, detail="Invalid or expired link.")
 
     if str(claims.get("doc_id", "")) != str(doc_id):
         raise HTTPException(status_code=401, detail="Invalid token for this document.")
 
-    # 2) Read current decision from DB
     with SessionLocal() as db:
         row = db.execute(
             text(
                 """
                 SELECT
                   id,
+                  doc_type,
                   status,
                   quote_po_number,
                   quote_note,
@@ -1032,8 +1092,10 @@ def get_quote_decision(doc_id: str, token: str):
         if not row:
             raise HTTPException(status_code=404, detail="Document not found.")
 
-    # 3) Normalize to what frontend expects
-    status = (row.get("status") or "PENDING").upper()
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+
+    status = (rowd.get("status") or "PENDING").upper()
     if status == "APPROVED":
         norm = "APPROVED"
     elif status == "REJECTED":
@@ -1042,11 +1104,10 @@ def get_quote_decision(doc_id: str, token: str):
         norm = "PENDING"
 
     return {
-        "doc_id": row["id"],
-        "status": norm,  # PENDING | APPROVED | REJECTED
-        "quote_po_number": row.get("quote_po_number"),
-        "quote_note": row.get("quote_note"),
-        "reject_reason": row.get("quote_reject_reason"),
-        "decided_at": row.get("quote_responded_at"),
+        "doc_id": rowd["id"],
+        "status": norm,
+        "quote_po_number": rowd.get("quote_po_number"),
+        "quote_note": rowd.get("quote_note"),
+        "reject_reason": rowd.get("quote_reject_reason"),
+        "decided_at": rowd.get("quote_responded_at"),
     }
-    

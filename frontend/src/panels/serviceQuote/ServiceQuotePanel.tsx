@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import ServiceQuoteEditor from "../../components/ServiceQuoteEditor";
 import type { DocRow, Links, ServiceQuoteFields } from "../../types";
-import { sendEmail, saveFinal, getFields, getLinks } from "../../api";
+import { sendEmail, saveFinal, getFields, getLinks, friendlyErrorMessage } from "../../api";
 import { withComputedTotals } from "./totals";
 
 export default function ServiceQuotePanel(props: {
@@ -34,6 +34,8 @@ export default function ServiceQuotePanel(props: {
 
     (async () => {
       try {
+        setErr(null);
+
         const data = await getFields(props.selectedId);
         const resolvedDocId = data?.doc_id || props.selectedId;
 
@@ -46,14 +48,17 @@ export default function ServiceQuotePanel(props: {
 
         const next = (data?.draft || data?.final || null) as ServiceQuoteFields | null;
         setFields(next ? withComputedTotals(next) : null);
-      } catch {
-        if (alive) setFields(null);
+      } catch (e: any) {
+        if (!alive) return;
+        setFields(null);
+        setErr(friendlyErrorMessage(e));
       }
     })();
 
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.selectedId]);
 
   function parseCc(input: string): string[] {
@@ -82,7 +87,7 @@ export default function ServiceQuotePanel(props: {
 
       setMsg(result?.reused_existing ? "Saved Final ✅ merged into latest quote row" : "Saved Final ✅");
     } catch (e: any) {
-      setErr(e?.message || String(e));
+      setErr(friendlyErrorMessage(e));
     }
   }
 
@@ -113,7 +118,7 @@ export default function ServiceQuotePanel(props: {
       setMsg("Email sent ✅");
       setCcInput("");
     } catch (e: any) {
-      setErr(e?.message || String(e));
+      setErr(friendlyErrorMessage(e));
     } finally {
       setSending(false);
     }
@@ -150,7 +155,7 @@ export default function ServiceQuotePanel(props: {
             />
           ) : (
             <div className="mutedSmall" style={{ padding: 12 }}>
-              No editable fields yet. Click <b>Restyle</b> to generate draft + fields.
+              No editable fields available for this quote.
             </div>
           )}
         </div>
