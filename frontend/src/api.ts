@@ -34,16 +34,33 @@ export async function getLinks(docId: string) {
   return httpJson(`${API_BASE}/api/documents/${docId}/links`);
 }
 
-export async function restyleDoc(docId: string) {
+export async function restyleDoc(docId: string): Promise<{
+  ok: boolean;
+  doc_id: string;
+  styled_draft_s3_key?: string | null;
+  reused_existing?: boolean;
+}> {
   return httpJson(`${API_BASE}/api/documents/${docId}/restyle`, { method: "POST" });
 }
 
 // fields + final
-export async function getFields(docId: string) {
+export async function getFields(docId: string): Promise<{
+  doc_id: string;
+  draft?: any;
+  final?: any;
+  source?: string;
+  doc_type?: string;
+}> {
   return httpJson(`${API_BASE}/api/documents/${docId}/fields`);
 }
 
-export async function saveFinal(docId: string, fields: any) {
+export async function saveFinal(docId: string, fields: any): Promise<{
+  ok: boolean;
+  doc_id: string;
+  final_s3_key?: string | null;
+  customer_email?: string | null;
+  reused_existing?: boolean;
+}> {
   return httpJson(`${API_BASE}/api/documents/${docId}/save-final`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -59,19 +76,27 @@ export async function sendEmail(
     client_email?: string;
     deficiency_report_link?: string;
   }
-) {
-  const res = await fetch(`${API_BASE}/api/documents/${docId}/send-email`, {
+): Promise<{
+  ok: boolean;
+  doc_id: string;
+  to: string;
+  cc: string[];
+  url: string;
+  sent_at?: string | null;
+  template: string;
+  reviewable: boolean;
+  payment_url?: string | null;
+  quote_number?: string | null;
+}> {
+  return httpJson(`${API_BASE}/api/documents/${docId}/send-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
 }
 
 // ✅ NEW: invoice send
 export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?: string }) {
-  // POST /api/documents/:id/invoice/send
   return httpJson(`${API_BASE}/api/documents/${docId}/invoice/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -80,7 +105,6 @@ export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?:
 }
 
 // ✅ NEW: lookup invoice doc by invoice number (optional UX)
-// backend should implement /api/invoices/lookup?number=1013
 export async function lookupInvoiceByNumber(invoiceNumber: string) {
   const usp = new URLSearchParams({ number: String(invoiceNumber).trim() });
   return httpJson(`${API_BASE}/api/invoices/lookup?${usp.toString()}`);

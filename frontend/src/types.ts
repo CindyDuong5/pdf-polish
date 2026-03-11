@@ -5,25 +5,30 @@ export type DocRow = {
   status: string | null;
 
   customer_name: string | null;
-  customer_email: string | null;   // ✅ add (you already return it from backend)
+  customer_email: string | null;
   property_address: string | null;
 
   invoice_number: string | null;
   quote_number: string | null;
   job_report_number: string | null;
 
-  created_at: string | null;
-
   original_s3_key: string | null;
   styled_draft_s3_key: string | null;
   final_s3_key: string | null;
 
-  // ✅ new "sent" metadata
   sent_to: string | null;
   sent_cc: string | null;
   sent_at: string | null;
 
-  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+
+  quote_po_number?: string | null;
+  quote_note?: string | null;
+  quote_reject_reason?: string | null;
+  quote_responded_at?: string | null;
+
+  error?: string | null;
 };
 
 export type Links = {
@@ -35,27 +40,36 @@ export type Links = {
   final: { key: string | null; url: string | null };
 };
 
-// Service Quote editable shape (what backend returns)
-export type SQItem = { name: string; price: string; description: string };
+export type ServiceQuoteLine = {
+  qty?: string | number;
+  description?: string;
+  unit_price?: string | number;
+  amount?: string | number;
+};
 
 export type ServiceQuoteFields = {
-  client_name: string;
-  client_phone: string;
-  client_email: string;
+  quote_number?: string;
+  quote_date?: string;
+  expiry_date?: string;
 
-  company_name: string;
-  company_address: string;
+  client_name?: string;
+  client_email?: string;
+  client_phone?: string;
 
-  property_name: string;
-  property_address: string;
+  property_name?: string;
+  property_address?: string;
+  company_name?: string;
 
-  quote_number: string;
-  quote_date: string;
-  quote_description: string;
+  scope_of_work?: string;
+  exclusions?: string;
+  notes?: string;
 
-  items: SQItem[];
+  subtotal?: string | number;
+  tax_rate?: string | number;
+  tax_amount?: string | number;
+  total?: string | number;
 
-  subtotal: string;
-  tax: string;
-  total: string;
+  line_items?: ServiceQuoteLine[];
+
+  [key: string]: any;
 };

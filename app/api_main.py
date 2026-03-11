@@ -17,7 +17,7 @@ from app.security.quote_response_token import make_token, verify_token  # ✅ us
 from app.services.document_fields import get_fields, set_final
 from app.services.keys import final_key_for
 from app.services.pdf_stamp import stamp_pdf
-from app.services.styling_service import ensure_draft
+from app.services.styling_service import ensure_draft, _mark_older_quote_rows_replaced
 from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
 from app.storage.s3_storage import get_storage
 from app.styling.service_quote.renderer import render_service_quote
@@ -72,6 +72,8 @@ def list_documents(
     if status:
         where.append("status = :status")
         params["status"] = status
+    else:
+        where.append("COALESCE(status, '') <> 'REPLACED'")
 
     if q:
         where.append(
@@ -122,7 +124,6 @@ def list_documents(
     with SessionLocal() as db:
         rows = db.execute(sql, params).mappings().all()
         return {"items": [dict(r) for r in rows]}
-
 
 @app.get("/api/documents/{doc_id}")
 def get_document(doc_id: str):
@@ -327,33 +328,37 @@ def finalize_document(
 @app.post("/api/documents/{doc_id}/restyle")
 def restyle_document(doc_id: str):
     with SessionLocal() as db:
-        key = ensure_draft(db, doc_id, force=True)
-        return {"ok": True, "styled_draft_s3_key": key}
-
+        result = ensure_draft(db, doc_id, force=True)
+        return {
+            "ok": True,
+            "doc_id": result["doc_id"],
+            "styled_draft_s3_key": result["styled_draft_s3_key"],
+            "reused_existing": result["reused_existing"],
+        }
 
 # ------------------------------------------------------------
 # Fields: editable JSON (draft/final)
 # ------------------------------------------------------------
-# app/api_main.py
 
 @app.get("/api/documents/{doc_id}/fields")
 def get_document_fields(doc_id: str):
     with SessionLocal() as db:
-        # A) Service Quote / Project Quote editor table
         row = get_fields(db, doc_id)
+        effective_doc_id = doc_id
+
         if not row:
-            ensure_draft(db, doc_id, force=False)
-            row = get_fields(db, doc_id)
+            result = ensure_draft(db, doc_id, force=False)
+            effective_doc_id = result["doc_id"]
+            row = get_fields(db, effective_doc_id)
 
         if row:
             return {
-                "doc_id": doc_id,
+                "doc_id": effective_doc_id,
                 "draft": row.get("draft_json"),
                 "final": row.get("final_json"),
                 "source": "document_fields",
             }
 
-        # B) Fallback for INVOICE (and anything stored on documents row)
         r2 = db.execute(
             text(
                 """
@@ -362,7 +367,7 @@ def get_document_fields(doc_id: str):
                 WHERE id = :id
                 """
             ),
-            {"id": doc_id},
+            {"id": effective_doc_id},
         ).mappings().first()
 
         if not r2:
@@ -373,7 +378,7 @@ def get_document_fields(doc_id: str):
 
         if extracted or overrides:
             return {
-                "doc_id": doc_id,
+                "doc_id": effective_doc_id,
                 "draft": extracted,
                 "final": overrides,
                 "source": "documents_json",
@@ -381,10 +386,11 @@ def get_document_fields(doc_id: str):
             }
 
         raise HTTPException(status_code=404, detail="No fields available")
-
+    
 # ------------------------------------------------------------
 # ✅ Save Final from edited fields (Service Quote)
 # ------------------------------------------------------------
+
 @app.post("/api/documents/{doc_id}/save-final")
 def save_final(doc_id: str, body: dict = Body(...)):
     fields = body.get("fields")
@@ -406,30 +412,34 @@ def save_final(doc_id: str, body: dict = Body(...)):
         doc_type = row.get("doc_type") or ""
         dt = doc_type.upper()
 
-        # ✅ Guard: this endpoint must only finalize quotes
         if ("SERVICE_QUOTE" not in dt) and ("PROJECT_QUOTE" not in dt) and ("QUOTE" not in dt):
             raise HTTPException(status_code=409, detail=f"Not a quote document (doc_type={doc_type})")
 
+        target_doc_id = str(doc_id)
         original_key = row["original_s3_key"]
         if not original_key:
             raise HTTPException(status_code=400, detail="Missing original_s3_key")
 
         db.execute(
-            text("UPDATE public.documents SET status='FINALIZING', updated_at=now(), error=null WHERE id=:id"),
-            {"id": doc_id},
+            text(
+                """
+                UPDATE public.documents
+                SET status='FINALIZING', updated_at=now(), error=null
+                WHERE id=:id
+                """
+            ),
+            {"id": target_doc_id},
         )
         db.commit()
 
         try:
-            # save JSON to document_fields.final_json
-            set_final(db, doc_id, fields)
+            set_final(db, target_doc_id, fields)
             db.commit()
 
-            # denormalize into documents table for list view/search
+            quote_num = (fields.get("quote_number") or "").strip() or None
             client_email = (fields.get("client_email") or "").strip() or None
             client_name = (fields.get("client_name") or "").strip() or None
             prop_addr = (fields.get("property_address") or "").strip() or None
-            quote_num = (fields.get("quote_number") or "").strip() or None
 
             db.execute(
                 text(
@@ -444,7 +454,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
                     """
                 ),
                 {
-                    "id": doc_id,
+                    "id": target_doc_id,
                     "customer_email": client_email,
                     "customer_name": client_name,
                     "property_address": prop_addr,
@@ -453,7 +463,6 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
 
-            # render final PDF
             data = json_to_service_quote(fields)
 
             template_path = Path(
@@ -462,35 +471,51 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
             final_bytes = render_service_quote(template_path, data)
 
-            # ✅ namespaced final key by doc_type
-            fk = final_key_for(original_key, doc_id, doc_type=doc_type)
+            fk = final_key_for(original_key, target_doc_id, doc_type=doc_type)
             storage.upload_pdf_bytes(fk, final_bytes)
 
             db.execute(
                 text(
                     """
                     UPDATE public.documents
-                    SET final_s3_key=:k,
-                        status='FINALIZED',
-                        updated_at=now(),
-                        error=null
-                    WHERE id=:id
+                    SET final_s3_key = :k,
+                        status = 'FINALIZED',
+                        updated_at = now(),
+                        error = null
+                    WHERE id = :id
                     """
                 ),
-                {"id": doc_id, "k": fk},
+                {"id": target_doc_id, "k": fk},
             )
+
+            if quote_num:
+                _mark_older_quote_rows_replaced(db, quote_num, keep_id=target_doc_id)
+
             db.commit()
 
-            return {"ok": True, "final_s3_key": fk, "customer_email": client_email}
+            return {
+                "ok": True,
+                "doc_id": target_doc_id,
+                "final_s3_key": fk,
+                "customer_email": client_email,
+                "reused_existing": False,
+            }
 
         except Exception as e:
             db.rollback()
             db.execute(
-                text("UPDATE public.documents SET status='ERROR', updated_at=now(), error=:err WHERE id=:id"),
-                {"id": doc_id, "err": f"{type(e).__name__}: {e}"[:1000]},
+                text(
+                    """
+                    UPDATE public.documents
+                    SET status='ERROR', updated_at=now(), error=:err
+                    WHERE id=:id
+                    """
+                ),
+                {"id": target_doc_id, "err": f"{type(e).__name__}: {e}"[:1000]},
             )
             db.commit()
             raise
+
 
 class SendEmailIn(BaseModel):
     client_email: Optional[EmailStr] = None
@@ -569,7 +594,6 @@ def _get_buildops_invoice_id(rowd: dict) -> str | None:
 
 @app.post("/api/documents/{doc_id}/send-email")
 def send_email_any(doc_id: str, body: SendEmailIn):
-
     sql = text(
         """
         SELECT
@@ -600,8 +624,9 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             raise HTTPException(status_code=404, detail="Not found")
 
         rowd = dict(row)
+        real_doc_id = str(doc_id)
+        doc_type = rowd.get("doc_type") or ""
 
-        # recipient
         to_email = str(body.client_email or rowd.get("customer_email") or "").strip()
         if not to_email:
             raise HTTPException(status_code=400, detail="No client email (customer_email is empty)")
@@ -609,7 +634,6 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         deficiency_report_link = (body.deficiency_report_link or "").strip() or None
         storage = get_storage()
 
-        # choose pdf
         key = rowd["final_s3_key"] or rowd["styled_draft_s3_key"] or rowd["original_s3_key"]
         if not key:
             raise HTTPException(status_code=400, detail="No PDF available to send")
@@ -625,16 +649,13 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         )
         pdf_bytes = storage.download_bytes(key)
 
-        # greeting
         customer_name = (rowd.get("customer_name") or "").strip()
         greeting = f"Good day {customer_name}," if customer_name else "Good day,"
 
-        doc_type = rowd.get("doc_type") or ""
         reviewable = _is_reviewable_quote(doc_type)
 
-        # pull quote info (from final_json first)
         quote_number, property_name, company_name = _extract_quote_info(rowd)
-        display_quote_number = _display_quote_label(quote_number, doc_id)
+        display_quote_number = _display_quote_label(quote_number, real_doc_id)
 
         approve_url = None
         reject_url = None
@@ -644,26 +665,21 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             if not review_base:
                 raise RuntimeError("Missing PUBLIC_PORTAL_BASE_URL")
 
-            approve_token = make_token(doc_id, "accept", extra_claims={"quote_number": display_quote_number})
-            reject_token = make_token(doc_id, "reject", extra_claims={"quote_number": display_quote_number})
+            approve_token = make_token(real_doc_id, "accept", extra_claims={"quote_number": display_quote_number})
+            reject_token = make_token(real_doc_id, "reject", extra_claims={"quote_number": display_quote_number})
 
             approve_url = f"{review_base}/review?token={approve_token}"
             reject_url = f"{review_base}/review?token={reject_token}"
 
-        # ✅ Payment link (only for INVOICE)
         payment_url = None
         if "INVOICE" in (doc_type or "").upper():
             buildops_invoice_id = _get_buildops_invoice_id(rowd)
             if buildops_invoice_id:
                 try:
                     payment_url = get_invoice_payment_link(buildops_invoice_id)
-                except Exception as e:
-                    # Do NOT block sending if payment link fails (optional)
+                except Exception:
                     payment_url = None
 
-        # -----------------------------
-        # TEMPLATE ROUTING
-        # -----------------------------
         if reviewable:
             template_name = "quote.html"
             subject = (
@@ -708,7 +724,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "label": label,
                 "file_url": file_url,
                 "filename": filename,
-                "payment_url": payment_url,  # ✅ add to templates
+                "payment_url": payment_url,
                 "reviewable": False,
                 "approve_url": None,
                 "reject_url": None,
@@ -724,7 +740,6 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 + "If you have any questions, reply to this email.\n"
             )
 
-        # send
         cc_list = [str(x) for x in (body.cc or [])]
 
         send_email_brevo_smtp(
@@ -756,17 +771,18 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 WHERE id = :id
                 """
             ),
-            {"id": doc_id, "sent_to": to_email, "sent_cc": sent_cc},
+            {"id": real_doc_id, "sent_to": to_email, "sent_cc": sent_cc},
         )
         db.commit()
 
         sent_row = db.execute(
             text("SELECT sent_at FROM public.documents WHERE id=:id"),
-            {"id": doc_id},
+            {"id": real_doc_id},
         ).mappings().first()
 
         return {
             "ok": True,
+            "doc_id": real_doc_id,
             "to": to_email,
             "cc": cc_list,
             "url": file_url,
@@ -776,7 +792,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "payment_url": payment_url if ("INVOICE" in (doc_type or "").upper()) else None,
             "quote_number": display_quote_number if reviewable else None,
         }
-    
+      
 # --- Review actions: Accept / Reject (client approval) -----------------
 
 class AcceptIn(BaseModel):

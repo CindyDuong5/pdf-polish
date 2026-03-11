@@ -5,18 +5,24 @@ import InvoicePanel from "./invoice/InvoicePanel";
 
 export default function DocumentPanel(props: {
   selected: DocRow;
-  selectedId: string; // must be a real string (MainApp will pass selectedId!)
+  selectedId: string;
   links: Links | null;
   reloadKey: number;
-
   onRestyle: () => Promise<void>;
   loading: boolean;
   onLinksUpdated: (links: Links) => void;
+  onResolvedDocId: (docId: string) => void;
 }) {
   const type = (props.selected.doc_type || "").toUpperCase();
 
-  if (type.includes("SERVICE_QUOTE")) {
-    return <ServiceQuotePanel {...props} onLinksUpdated={props.onLinksUpdated}/>;
+  if (type.includes("SERVICE_QUOTE") || type.includes("PROJECT_QUOTE") || type.includes("QUOTE")) {
+    return (
+      <ServiceQuotePanel
+        {...props}
+        onLinksUpdated={props.onLinksUpdated}
+        onResolvedDocId={props.onResolvedDocId}
+      />
+    );
   }
 
   if (type.includes("INVOICE")) {

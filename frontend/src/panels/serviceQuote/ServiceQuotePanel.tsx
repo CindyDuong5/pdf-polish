@@ -14,6 +14,7 @@ export default function ServiceQuotePanel(props: {
   onRestyle: () => Promise<void>;
   loading: boolean;
   onLinksUpdated: (l: Links) => void;
+  onResolvedDocId: (docId: string) => void;
 }) {
   const [fields, setFields] = useState<ServiceQuoteFields | null>(null);
   const [ccInput, setCcInput] = useState("");
@@ -34,8 +35,16 @@ export default function ServiceQuotePanel(props: {
     (async () => {
       try {
         const data = await getFields(props.selectedId);
-        const next = (data?.draft || data?.final || null) as ServiceQuoteFields | null;
+        const resolvedDocId = data?.doc_id || props.selectedId;
+
         if (!alive) return;
+
+        if (resolvedDocId !== props.selectedId) {
+          props.onResolvedDocId(resolvedDocId);
+          return;
+        }
+
+        const next = (data?.draft || data?.final || null) as ServiceQuoteFields | null;
         setFields(next ? withComputedTotals(next) : null);
       } catch {
         if (alive) setFields(null);
@@ -60,10 +69,18 @@ export default function ServiceQuotePanel(props: {
     setErr(null);
 
     try {
-      await saveFinal(props.selectedId, withComputedTotals(fields));
-      setMsg("Saved Final ✅");
-      const l = await getLinks(props.selectedId);
+      const result = await saveFinal(props.selectedId, withComputedTotals(fields));
+      const resolvedDocId = result?.doc_id || props.selectedId;
+
+      if (resolvedDocId !== props.selectedId) {
+        props.onResolvedDocId(resolvedDocId);
+        return;
+      }
+
+      const l = await getLinks(resolvedDocId);
       props.onLinksUpdated(l);
+
+      setMsg(result?.reused_existing ? "Saved Final ✅ merged into latest quote row" : "Saved Final ✅");
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
@@ -78,11 +95,20 @@ export default function ServiceQuotePanel(props: {
     try {
       const cc = parseCc(ccInput);
 
-      await sendEmail(props.selectedId, {
+      const result = await sendEmail(props.selectedId, {
         cc,
         client_email: toEmail,
         deficiency_report_link: deficiencyReportLink.trim() || undefined,
       });
+
+      const resolvedDocId = result?.doc_id || props.selectedId;
+
+      if (resolvedDocId !== props.selectedId) {
+        props.onResolvedDocId(resolvedDocId);
+      } else {
+        const l = await getLinks(resolvedDocId);
+        props.onLinksUpdated(l);
+      }
 
       setMsg("Email sent ✅");
       setCcInput("");
