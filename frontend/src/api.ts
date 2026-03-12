@@ -73,6 +73,7 @@ export async function sendEmail(
   docId: string,
   payload: {
     cc?: string[];
+    bcc?: string[];
     client_email?: string;
     deficiency_report_link?: string;
   }
@@ -81,6 +82,7 @@ export async function sendEmail(
   doc_id: string;
   to: string;
   cc: string[];
+  bcc: string[];  
   url: string;
   sent_at?: string | null;
   template: string;
@@ -95,7 +97,10 @@ export async function sendEmail(
   });
 }
 
-export async function sendInvoice(docId: string, payload?: { cc?: string[]; to?: string }) {
+export async function sendInvoice(
+  docId: string,
+  payload?: { to?: string; cc?: string[]; bcc?: string[] }
+) {
   return httpJson(`${API_BASE}/api/documents/${docId}/invoice/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+
 from pathlib import Path
 from typing import Literal, List, Optional
 
@@ -596,6 +597,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
 class SendEmailIn(BaseModel):
     client_email: Optional[EmailStr] = None
     cc: Optional[List[EmailStr]] = None
+    bcc: Optional[List[EmailStr]] = None
     deficiency_report_link: Optional[str] = None
 
 
@@ -810,6 +812,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             )
 
         cc_list = [str(x) for x in (body.cc or [])]
+        bcc_list = [str(x) for x in (body.bcc or [])]
 
         send_email_brevo_smtp(
             to_email=to_email,
@@ -817,6 +820,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             html_body=html_body,
             text_body=text_body,
             cc_emails=cc_list,
+            bcc_emails=bcc_list,
             attachments=[
                 EmailAttachment(
                     filename=filename,
@@ -827,20 +831,21 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         )
 
         sent_cc = ", ".join(cc_list) if cc_list else None
-
+        sent_bcc = ", ".join(bcc_list) if bcc_list else None
         db.execute(
             text(
                 """
                 UPDATE public.documents
                 SET sent_to = :sent_to,
                     sent_cc = :sent_cc,
+                    sent_bcc = :sent_bcc,
                     sent_at = now(),
                     status = 'SENT',
                     updated_at = now()
                 WHERE id = :id
                 """
             ),
-            {"id": real_doc_id, "sent_to": to_email, "sent_cc": sent_cc},
+            {"id": real_doc_id, "sent_to": to_email, "sent_cc": sent_cc, "sent_bcc": sent_bcc},
         )
         db.commit()
 
@@ -854,6 +859,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "doc_id": real_doc_id,
             "to": to_email,
             "cc": cc_list,
+            "bcc": bcc_list,
             "url": file_url,
             "sent_at": sent_row["sent_at"] if sent_row else None,
             "template": template_name,

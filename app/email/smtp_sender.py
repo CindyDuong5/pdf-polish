@@ -53,6 +53,7 @@ def send_email_brevo_smtp(
     html_body: str,
     text_body: str,
     cc_emails: Optional[Iterable[str]] = None,
+    bcc_emails: list[str] | None = None,
     attachments: Sequence[EmailAttachment] = (),
 ) -> None:
     """
@@ -88,6 +89,7 @@ def send_email_brevo_smtp(
     if cc_list:
         msg["Cc"] = ", ".join(cc_list)
 
+    bcc_list = [e.strip() for e in (bcc_emails or []) if e and e.strip()]
     # Plain + HTML parts
     msg.set_content(text_body or "")
     msg.add_alternative(html_body or "", subtype="html")
@@ -115,5 +117,5 @@ def send_email_brevo_smtp(
         server.login(user, password)
 
         # IMPORTANT: Brevo requires SMTP envelope-from to be a valid email address.
-        to_addrs = [to_email] + cc_list
+        to_addrs = [to_email] + cc_list + bcc_list
         server.send_message(msg, from_addr=from_email, to_addrs=to_addrs)

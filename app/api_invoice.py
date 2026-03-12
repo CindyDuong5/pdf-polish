@@ -40,6 +40,8 @@ class SendInvoiceEmailIn(BaseModel):
 
     cc_emails: Optional[List[str]] = None
     cc: Optional[List[str]] = None
+    bcc_emails: Optional[List[str]] = None
+    bcc: Optional[List[str]] = None
 
 
 class GetPaymentLinkIn(BaseModel):
@@ -443,6 +445,9 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         cc = body.cc_emails or body.cc or []
         cc = [e.strip() for e in cc if isinstance(e, str) and e.strip()]
 
+        bcc = body.bcc_emails or body.bcc or []
+        bcc = [e.strip() for e in bcc if isinstance(e, str) and e.strip()]
+
         view_url = storage.presign_get_url(
             key=final_key,
             expires_seconds=7 * 24 * 3600,
@@ -485,6 +490,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             html_body=html,
             text_body=text_body,
             cc_emails=cc,
+            bcc_emails=bcc,
             attachments=(
                 EmailAttachment(
                     filename=f"Invoice-{invoice_number or doc_id}.pdf",
@@ -493,14 +499,16 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 ),
             ),
         )
-
+        sent_cc = ", ".join(cc) if cc else None
+        sent_bcc = ", ".join(bcc) if bcc else None
         db.execute(
             text(
                 """
                 UPDATE public.documents
                 SET
                     sent_to = :to_email,
-                    sent_cc = CAST(:cc AS jsonb),
+                    sent_cc = :sent_cc,
+                    sent_bcc = :sent_bcc,
                     sent_at = now(),
                     updated_at = now(),
                     error = null,
@@ -508,7 +516,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 WHERE id = :id
                 """
             ),
-            {"id": doc_id, "to_email": to_email, "cc": json.dumps(cc)},
+            {"id": doc_id, "to_email": to_email, "sent_cc": sent_cc, "sent_bcc": sent_bcc},
         )
         db.commit()
 
@@ -516,6 +524,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         "ok": True,
         "to": to_email,
         "cc": cc,
+        "bcc": bcc,
         "view_url": view_url,
         "payment_url": payment_url,
     }

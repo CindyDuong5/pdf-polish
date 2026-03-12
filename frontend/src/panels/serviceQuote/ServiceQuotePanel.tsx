@@ -18,6 +18,7 @@ export default function ServiceQuotePanel(props: {
 }) {
   const [fields, setFields] = useState<ServiceQuoteFields | null>(null);
   const [ccInput, setCcInput] = useState("");
+  const [bccInput, setBccInput] = useState("");
   const [deficiencyReportLink, setDeficiencyReportLink] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -99,9 +100,11 @@ export default function ServiceQuotePanel(props: {
 
     try {
       const cc = parseCc(ccInput);
+      const bcc = parseCc(bccInput);
 
       const result = await sendEmail(props.selectedId, {
         cc,
+        bcc,
         client_email: toEmail,
         deficiency_report_link: deficiencyReportLink.trim() || undefined,
       });
@@ -117,6 +120,7 @@ export default function ServiceQuotePanel(props: {
 
       setMsg("Email sent ✅");
       setCcInput("");
+      setBccInput("");
     } catch (e: any) {
       setErr(friendlyErrorMessage(e));
     } finally {
@@ -191,6 +195,18 @@ export default function ServiceQuotePanel(props: {
                 value={ccInput}
                 onChange={(e) => setCcInput(e.target.value)}
                 placeholder="cc1@email.com, cc2@email.com"
+              />
+            </label>
+
+            <label style={{ display: "block", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+                BCC (comma or semicolon separated)
+              </div>
+              <input
+                className="input"
+                value={bccInput}
+                onChange={(e) => setBccInput(e.target.value)}
+                placeholder="bcc1@email.com, bcc2@email.com"
               />
             </label>
 

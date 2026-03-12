@@ -24,6 +24,7 @@ export default function InvoicePanel(props: {
 }) {
   const [fields, setFields] = useState<InvoiceFields | null>(null);
   const [ccInput, setCcInput] = useState("");
+  const [bccInput, setBccInput] = useState("");
   const [toInput, setToInput] = useState("");
   const [sending, setSending] = useState(false);
   const [savingFinal, setSavingFinal] = useState(false);
@@ -181,8 +182,11 @@ export default function InvoicePanel(props: {
 
     try {
       const cc = parseCc(ccInput);
-      await sendInvoice(props.selectedId, { to, cc });
+      const bcc = parseCc(bccInput);
+      await sendInvoice(props.selectedId, { to, cc, bcc });
       setMsg("Invoice email sent ✅");
+      setCcInput("");
+      setBccInput("");
     } catch (e: any) {
       setErr(friendlyErrorMessage(e));
     } finally {
@@ -255,6 +259,18 @@ export default function InvoicePanel(props: {
                 value={ccInput}
                 onChange={(e) => setCcInput(e.target.value)}
                 placeholder="cc1@email.com, cc2@email.com"
+              />
+            </label>
+
+            <label style={{ display: "block", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+                BCC (comma/semicolon separated)
+              </div>
+              <input
+                className="input"
+                value={bccInput}
+                onChange={(e) => setBccInput(e.target.value)}
+                placeholder="bcc1@email.com, bcc2@email.com"
               />
             </label>
 
