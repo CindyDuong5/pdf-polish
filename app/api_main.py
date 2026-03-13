@@ -599,6 +599,7 @@ class SendEmailIn(BaseModel):
     cc: Optional[List[EmailStr]] = None
     bcc: Optional[List[EmailStr]] = None
     deficiency_report_link: Optional[str] = None
+    subject: Optional[str] = None
 
 
 def _is_reviewable_quote(doc_type: str) -> bool:
@@ -753,11 +754,12 @@ def send_email_any(doc_id: str, body: SendEmailIn):
 
         if reviewable:
             template_name = "quote.html"
-            subject = (
+            default_subject = (
                 f"Quote #{display_quote_number} - {property_name}"
                 if property_name
-                else f"Quote #{display_quote_number}"
+                else f"Quote #{display_quote_number} - Please Review"
             )
+            subject = (body.subject or "").strip() or default_subject
 
             context = {
                 "client_name": customer_name or None,
@@ -786,7 +788,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         else:
             kind = email_kind_for(doc_type)
             template_name = template_for_kind(kind)
-            subject = build_subject(kind, doc_type, str(label))
+            default_subject = build_subject(kind, doc_type, str(label))
+            subject = (body.subject or "").strip() or default_subject
 
             context = {
                 "greeting": greeting,
@@ -866,6 +869,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             "reviewable": reviewable,
             "payment_url": payment_url if ("INVOICE" in (doc_type or "").upper()) else None,
             "quote_number": display_quote_number if reviewable else None,
+            "subject": subject,
         }
 
 

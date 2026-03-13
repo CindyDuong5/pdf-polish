@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
@@ -59,24 +60,33 @@ class GmailClient:
 
         self._secret_version_name: Optional[str] = None
         self._auth_source: str = ""
+        self._creds: Optional[Credentials] = None
 
         creds, auth_source, version_name = self._load_creds()
+        self._creds = creds
         self._auth_source = auth_source
         self._secret_version_name = version_name
 
         print(f"GmailClient auth source = {auth_source}")
         self.service = build("gmail", "v1", credentials=creds)
 
+    def _refresh_creds_if_needed(self, creds: Credentials, source_label: str) -> Credentials:
+        if creds.expired and creds.refresh_token:
+            print(f"Refreshing Gmail credentials from {source_label}...")
+            creds.refresh(Request())
+        return creds
+
     def _load_creds(self) -> tuple[Credentials, str, Optional[str]]:
         if self.project_id and self.token_secret:
             token_text, version_name = _load_secret_text_and_version(self.project_id, self.token_secret)
             token_info = json.loads(token_text)
+
             print("GMAIL TOKEN SECRET VERSION =", version_name)
             print("TOKEN SCOPES =", token_info.get("scopes"))
             print("HAS REFRESH TOKEN =", bool(token_info.get("refresh_token")))
 
-            # ✅ Use scopes stored in token JSON if present, fallback to SCOPES
             creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            creds = self._refresh_creds_if_needed(creds, f"Secret Manager token {self.token_secret}")
             return creds, f"secret_manager:{self.token_secret}", version_name
 
         # Local fallback
@@ -88,24 +98,36 @@ class GmailClient:
                 "or run scripts/gmail_auth.py locally."
             )
 
-        # ✅ Same idea locally: token file already includes scopes, but keep SCOPES as fallback
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        creds = self._refresh_creds_if_needed(creds, f"local token {token_path}")
         return creds, f"file:{token_path}", None
 
     def ensure_latest_token(self) -> None:
+        """
+        Cloud Run mode:
+          - if Secret Manager latest version changes, reload Gmail service
+        Local mode:
+          - no-op
+        """
         if not (self.project_id and self.token_secret):
             return  # local mode
 
         token_text, latest_version_name = _load_secret_text_and_version(self.project_id, self.token_secret)
+
         if self._secret_version_name != latest_version_name:
             print(
-                f"Gmail token rotated: {self._secret_version_name} -> {latest_version_name}. Reloading Gmail service..."
+                f"Gmail token rotated: {self._secret_version_name} -> {latest_version_name}. "
+                "Reloading Gmail service..."
             )
+
             token_info = json.loads(token_text)
+            print("TOKEN SCOPES =", token_info.get("scopes"))
+            print("HAS REFRESH TOKEN =", bool(token_info.get("refresh_token")))
 
-            # ✅ Use token's scopes if present
             creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            creds = self._refresh_creds_if_needed(creds, f"rotated Secret Manager token {self.token_secret}")
 
+            self._creds = creds
             self._secret_version_name = latest_version_name
             self.service = build("gmail", "v1", credentials=creds)
 
@@ -113,7 +135,6 @@ class GmailClient:
         """Return Gmail message IDs for a label."""
         self.ensure_latest_token()
 
-        # Gmail API expects label IDs; label names work if they exist as a label.
         label_id = self._get_label_id_by_name(label_name)
         if not label_id:
             raise ValueError(f"Label not found: {label_name}")
@@ -141,7 +162,11 @@ class GmailClient:
             )
             .execute()
         )
-        headers = {h["name"].lower(): h.get("value") for h in msg.get("payload", {}).get("headers", [])}
+
+        headers = {
+            h["name"].lower(): h.get("value")
+            for h in msg.get("payload", {}).get("headers", [])
+        }
 
         internal_ms = msg.get("internalDate")
         internal_dt = None
@@ -166,7 +191,7 @@ class GmailClient:
         parts = payload.get("parts", []) or []
         found: List[Tuple[str, bytes]] = []
 
-        def walk(parts_list):
+        def walk(parts_list: list[dict]) -> None:
             for p in parts_list:
                 mime = (p.get("mimeType") or "").lower()
                 filename = p.get("filename") or ""

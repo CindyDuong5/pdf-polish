@@ -18,6 +18,7 @@ export type DocRow = {
 
   sent_to: string | null;
   sent_cc: string | null;
+  sent_bcc?: string | null;
   sent_at: string | null;
 
   created_at: string | null;

@@ -19,6 +19,8 @@ export default function ServiceQuotePanel(props: {
   const [fields, setFields] = useState<ServiceQuoteFields | null>(null);
   const [ccInput, setCcInput] = useState("");
   const [bccInput, setBccInput] = useState("");
+  const [subjectInput, setSubjectInput] = useState("");
+  const [subjectDirty, setSubjectDirty] = useState(false);
   const [deficiencyReportLink, setDeficiencyReportLink] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -28,7 +30,22 @@ export default function ServiceQuotePanel(props: {
   const draftUrl = props.links?.styled_draft?.url || null;
   const finalUrl = props.links?.final?.url || null;
 
-  const toEmail = props.selected?.customer_email || fields?.client_email || "";
+  const toEmail = (fields?.client_email || props.selected?.customer_email || "").trim();
+
+  function buildDefaultQuoteSubject(next: ServiceQuoteFields | null) {
+    const quoteNumber = String(next?.quote_number || props.selected?.quote_number || "").trim();
+
+    const propertyName = String(
+      next?.property_name ||
+        next?.property_address ||
+        props.selected?.property_address ||
+        ""
+    ).trim();
+
+    if (quoteNumber && propertyName) return `Quote #${quoteNumber} - ${propertyName}`;
+    if (quoteNumber) return `Quote #${quoteNumber} - Please Review`;
+    return "Quote - Please Review";
+  }
 
   useEffect(() => {
     let alive = true;
@@ -48,7 +65,11 @@ export default function ServiceQuotePanel(props: {
         }
 
         const next = (data?.draft || data?.final || null) as ServiceQuoteFields | null;
-        setFields(next ? withComputedTotals(next) : null);
+        const computed = next ? withComputedTotals(next) : null;
+
+        setFields(computed);
+        setSubjectInput(buildDefaultQuoteSubject(computed));
+        setSubjectDirty(false);
       } catch (e: any) {
         if (!alive) return;
         setFields(null);
@@ -61,6 +82,19 @@ export default function ServiceQuotePanel(props: {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.selectedId]);
+
+  useEffect(() => {
+    if (subjectDirty) return;
+    setSubjectInput(buildDefaultQuoteSubject(fields));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    fields?.quote_number,
+    fields?.property_name,
+    fields?.property_address,
+    props.selected?.quote_number,
+    props.selected?.property_address,
+    subjectDirty,
+  ]);
 
   function parseCc(input: string): string[] {
     return input
@@ -107,6 +141,7 @@ export default function ServiceQuotePanel(props: {
         bcc,
         client_email: toEmail,
         deficiency_report_link: deficiencyReportLink.trim() || undefined,
+        subject: subjectInput.trim() || undefined,
       });
 
       const resolvedDocId = result?.doc_id || props.selectedId;
@@ -176,6 +211,21 @@ export default function ServiceQuotePanel(props: {
 
             <label style={{ display: "block", marginBottom: 10 }}>
               <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+                Subject
+              </div>
+              <input
+                className="input"
+                value={subjectInput}
+                onChange={(e) => {
+                  setSubjectInput(e.target.value);
+                  setSubjectDirty(true);
+                }}
+                placeholder="Email subject"
+              />
+            </label>
+
+            <label style={{ display: "block", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
                 Deficiency Report Link (optional)
               </div>
               <input
@@ -214,7 +264,7 @@ export default function ServiceQuotePanel(props: {
               <button
                 className="btn btnPrimary"
                 onClick={onSendEmail}
-                disabled={sending || props.loading || !props.selectedId || !toEmail}
+                disabled={sending || props.loading || !props.selectedId || !toEmail.trim()}
               >
                 {sending ? "Sending..." : "📧 Send"}
               </button>

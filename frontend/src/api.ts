@@ -76,6 +76,7 @@ export async function sendEmail(
     bcc?: string[];
     client_email?: string;
     deficiency_report_link?: string;
+    subject?: string;
   }
 ): Promise<{
   ok: boolean;
@@ -89,6 +90,7 @@ export async function sendEmail(
   reviewable: boolean;
   payment_url?: string | null;
   quote_number?: string | null;
+  subject?: string;
 }> {
   return httpJson(`${API_BASE}/api/documents/${docId}/send-email`, {
     method: "POST",
@@ -99,7 +101,7 @@ export async function sendEmail(
 
 export async function sendInvoice(
   docId: string,
-  payload?: { to?: string; cc?: string[]; bcc?: string[] }
+  payload?: { to?: string; cc?: string[]; bcc?: string[]; subject?: string }
 ) {
   return httpJson(`${API_BASE}/api/documents/${docId}/invoice/send`, {
     method: "POST",

@@ -43,6 +43,7 @@ class SendInvoiceEmailIn(BaseModel):
     bcc_emails: Optional[List[str]] = None
     bcc: Optional[List[str]] = None
 
+    subject: Optional[str] = None
 
 class GetPaymentLinkIn(BaseModel):
     force_over_limit: bool = False
@@ -467,7 +468,9 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
         kind = email_kind_for("INVOICE")
         tpl = template_for_kind(kind)
-        subject = build_subject(kind, "INVOICE", invoice_number or doc_id)
+
+        default_subject = build_subject(kind, "INVOICE", invoice_number or doc_id)
+        subject = (body.subject or "").strip() or default_subject
 
         html = render_html(
             tpl,
@@ -527,4 +530,5 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         "bcc": bcc,
         "view_url": view_url,
         "payment_url": payment_url,
+        "subject": subject,
     }

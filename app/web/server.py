@@ -190,6 +190,7 @@ def renew_watch():
 
     try:
         resp = service.users().watch(userId="me", body=watch_body).execute()
+        logger.info("users.watch success: %s", resp)
     except Exception as e:
         logger.exception("users.watch failed")
         raise HTTPException(status_code=500, detail=f"users.watch failed: {e}")

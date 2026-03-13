@@ -26,16 +26,31 @@ export default function InvoicePanel(props: {
   const [ccInput, setCcInput] = useState("");
   const [bccInput, setBccInput] = useState("");
   const [toInput, setToInput] = useState("");
+  const [subjectInput, setSubjectInput] = useState("");
   const [sending, setSending] = useState(false);
   const [savingFinal, setSavingFinal] = useState(false);
   const [gettingPaymentLink, setGettingPaymentLink] = useState(false);
   const [toDirty, setToDirty] = useState(false);
+  const [subjectDirty, setSubjectDirty] = useState(false);
 
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const draftUrl = props.links?.styled_draft?.url || null;
   const finalUrl = props.links?.final?.url || null;
+
+  function buildDefaultInvoiceSubject(next: InvoiceFields | null) {
+    const invoiceNumber = String(
+      next?.invoice_number ||
+        (next as any)?.invoice_no ||
+        props.selected?.invoice_number ||
+        ""
+    ).trim();
+
+    return invoiceNumber
+      ? `Invoice #${invoiceNumber} from Mainline Fire Protection`
+      : "Invoice from Mainline Fire Protection";
+  }
 
   useEffect(() => {
     let alive = true;
@@ -58,6 +73,9 @@ export default function InvoicePanel(props: {
 
         setToInput(defaultTo);
         setToDirty(false);
+
+        setSubjectInput(buildDefaultInvoiceSubject(computed));
+        setSubjectDirty(false);
       } catch (e: any) {
         if (!alive) return;
         setFields(null);
@@ -81,6 +99,12 @@ export default function InvoicePanel(props: {
 
     setToInput(nextTo);
   }, [fields?.billClient_email, props.selected?.customer_email, toDirty]);
+
+  useEffect(() => {
+    if (subjectDirty) return;
+    setSubjectInput(buildDefaultInvoiceSubject(fields));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields?.invoice_number, props.selected?.invoice_number, subjectDirty]);
 
   const paymentUrl = useMemo(() => {
     return (fields as any)?.payment_url || "";
@@ -183,7 +207,14 @@ export default function InvoicePanel(props: {
     try {
       const cc = parseCc(ccInput);
       const bcc = parseCc(bccInput);
-      await sendInvoice(props.selectedId, { to, cc, bcc });
+
+      await sendInvoice(props.selectedId, {
+        to,
+        cc,
+        bcc,
+        subject: subjectInput.trim() || undefined,
+      });
+
       setMsg("Invoice email sent ✅");
       setCcInput("");
       setBccInput("");
@@ -247,6 +278,19 @@ export default function InvoicePanel(props: {
                   setToDirty(true);
                 }}
                 placeholder="client@email.com"
+              />
+            </label>
+
+            <label style={{ display: "block", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Subject</div>
+              <input
+                className="input"
+                value={subjectInput}
+                onChange={(e) => {
+                  setSubjectInput(e.target.value);
+                  setSubjectDirty(true);
+                }}
+                placeholder="Email subject"
               />
             </label>
 
