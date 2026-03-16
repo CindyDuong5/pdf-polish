@@ -15,10 +15,19 @@ export default function DocumentPanel(props: {
 }) {
   const type = (props.selected.doc_type || "").toUpperCase();
 
-  if (type.includes("SERVICE_QUOTE") || type.includes("PROJECT_QUOTE") || type.includes("QUOTE")) {
+  if (
+    type.includes("SERVICE_QUOTE") ||
+    type.includes("PROJECT_QUOTE") ||
+    type.includes("QUOTE")
+  ) {
     return (
       <ServiceQuotePanel
-        {...props}
+        selected={props.selected}
+        selectedId={props.selectedId}
+        links={props.links}
+        reloadKey={props.reloadKey}
+        onRestyle={props.onRestyle}
+        loading={props.loading}
         onLinksUpdated={props.onLinksUpdated}
         onResolvedDocId={props.onResolvedDocId}
       />
@@ -26,7 +35,16 @@ export default function DocumentPanel(props: {
   }
 
   if (type.includes("INVOICE")) {
-    return <InvoicePanel {...props} onLinksUpdated={props.onLinksUpdated} />;
+    return (
+      <InvoicePanel
+        selected={props.selected}
+        selectedId={props.selectedId}
+        links={props.links}
+        reloadKey={props.reloadKey}
+        loading={props.loading}
+        onLinksUpdated={props.onLinksUpdated}
+      />
+    );
   }
 
   return (

@@ -18,7 +18,6 @@ export default function InvoicePanel(props: {
   selectedId: string;
   links: Links | null;
   reloadKey: number;
-  onRestyle: () => Promise<void>;
   loading: boolean;
   onLinksUpdated: (links: Links) => void;
 }) {
@@ -63,7 +62,6 @@ export default function InvoicePanel(props: {
         const next = (data?.draft || data?.final || null) as InvoiceFields | null;
         if (!alive) return;
 
-        // ✅ Keep BuildOps / mapper values exactly as returned
         setFields(next);
 
         const defaultTo =
@@ -139,7 +137,6 @@ export default function InvoicePanel(props: {
     setSavingFinal(true);
 
     try {
-      // ✅ Save exactly what user currently sees
       await saveFinalInvoice(props.selectedId, fields);
       setMsg("Saved Final ✅");
 
@@ -175,7 +172,6 @@ export default function InvoicePanel(props: {
         force_over_limit: force,
       });
 
-      // ✅ Only update payment_url, do not touch totals
       setFields((prev) =>
         prev
           ? ({
@@ -327,7 +323,13 @@ export default function InvoicePanel(props: {
                 <button
                   className="btn btnGhost"
                   onClick={onGetPaymentLink}
-                  disabled={gettingPaymentLink || savingFinal || props.loading || !props.selectedId || !fields}
+                  disabled={
+                    gettingPaymentLink ||
+                    savingFinal ||
+                    props.loading ||
+                    !props.selectedId ||
+                    !fields
+                  }
                 >
                   {gettingPaymentLink ? "Getting..." : "Get Payment Link"}
                 </button>
@@ -350,7 +352,13 @@ export default function InvoicePanel(props: {
             <button
               className="btn btnPrimary"
               onClick={onSendInvoice}
-              disabled={sending || savingFinal || props.loading || !props.selectedId || !toInput.trim()}
+              disabled={
+                sending ||
+                savingFinal ||
+                props.loading ||
+                !props.selectedId ||
+                !toInput.trim()
+              }
             >
               {sending ? "Sending..." : "📧 Send Invoice"}
             </button>
