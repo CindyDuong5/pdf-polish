@@ -1,5 +1,6 @@
 // frontend/src/components/InvoiceEditor.tsx
 import React, { useMemo } from "react";
+import { recomputeInvoiceTotals } from "../panels/invoice/totals";
 
 type LaborRow = {
   date?: string;
@@ -8,8 +9,8 @@ type LaborRow = {
   taxable?: boolean;
   hours?: number;
   rate?: number;
-  price?: number | string; // allow string just in case API returns "$123.45"
-  unit?: string; // "hr"
+  price?: number | string;
+  unit?: string;
 };
 
 type PartRow = {
@@ -20,8 +21,8 @@ type PartRow = {
   taxable?: boolean;
   qty?: number;
   unit_price?: number;
-  price?: number | string; // allow string just in case API returns "$123.45"
-  unit?: string; // "ea"
+  price?: number | string;
+  unit?: string;
 };
 
 export type InvoiceFields = {
@@ -45,9 +46,9 @@ export type InvoiceFields = {
   labor_rows?: LaborRow[];
   parts_rows?: PartRow[];
 
-  discount?: string; // "$0.00"
-  service_fee?: string; // "$5.00"
-  sales_tax_rate?: string; // "13%"
+  discount?: string;
+  service_fee?: string;
+  sales_tax_rate?: string;
   tax_amount?: string;
   taxable_subtotal?: string;
   subtotal?: string;
@@ -58,8 +59,6 @@ export type InvoiceFields = {
 
   buildops_invoice_id?: string;
   buildops_invoice_number?: string;
-
-  // ✅ Customer WO field (BuildOps naming)
   customerProvidedWONumber?: string;
 };
 
@@ -69,61 +68,13 @@ function parseMoney(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function money2(n: number): string {
-  return `$${(Math.round(n * 100) / 100).toFixed(2)}`;
-}
-
-function parsePercent(v: any): number {
-  const s = String(v ?? "").replace(/[^0-9.\-]/g, "").trim();
-  const n = Number(s);
-  return Number.isFinite(n) ? n / 100 : 0;
-}
-
-// number-safe for numeric inputs (hours/rate/qty/unit_price)
 function num(v: any): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
-// money-safe for $ strings OR numbers
 function m(v: any): number {
   return typeof v === "number" && Number.isFinite(v) ? v : parseMoney(v);
-}
-
-function recomputeTotals(f: InvoiceFields): InvoiceFields {
-  // Subtotals from rows (money-safe)
-  const laborSubtotal = (f.labor_rows || []).reduce((sum, r) => sum + m(r.price), 0);
-  const partsSubtotal = (f.parts_rows || []).reduce((sum, r) => sum + m(r.price), 0);
-
-  // Taxable subtotal only from taxable rows
-  const taxableLabor = (f.labor_rows || []).reduce((sum, r) => sum + (r.taxable ? m(r.price) : 0), 0);
-  const taxableParts = (f.parts_rows || []).reduce((sum, r) => sum + (r.taxable ? m(r.price) : 0), 0);
-  const taxableSubtotal = taxableLabor + taxableParts;
-
-  const subtotal = laborSubtotal + partsSubtotal;
-
-  const discount = m(f.discount); // expects a positive discount amount like "50" or "$50"
-  const serviceFee = m(f.service_fee);
-
-  // ✅ Subtotal After Discount/Fees = subtotal + service fee - discount
-  const after = subtotal + serviceFee - discount;
-
-  const taxRate = parsePercent(f.sales_tax_rate) || 0.13;
-  const tax = taxableSubtotal * taxRate;
-
-  const total = after + tax;
-  const paid = m(f.amount_paid);
-  const balance = total - paid;
-
-  return {
-    ...f,
-    taxable_subtotal: money2(taxableSubtotal),
-    subtotal: money2(subtotal),
-    subtotal_after_discount_fees: money2(after),
-    tax_amount: money2(tax),
-    total: money2(total),
-    balance: money2(balance),
-  };
 }
 
 function amountCell(value: number) {
@@ -137,11 +88,10 @@ export default function InvoiceEditor(props: {
   saving: boolean;
   canSave: boolean;
 }) {
-  const v = useMemo(() => recomputeTotals(props.value), [props.value]);
+  const v = useMemo(() => recomputeInvoiceTotals(props.value), [props.value]);
 
-  // keep parent in sync with computed totals
   React.useEffect(() => {
-    const next = recomputeTotals(props.value);
+    const next = recomputeInvoiceTotals(props.value);
     if (
       next.subtotal !== props.value.subtotal ||
       next.tax_amount !== props.value.tax_amount ||
@@ -244,7 +194,6 @@ export default function InvoiceEditor(props: {
 
   return (
     <div style={{ padding: 12 }}>
-      {/* ✅ Top meta fields */}
       <div style={{ fontWeight: 900, marginBottom: 8 }}>Invoice Info</div>
       <div className="row gap8" style={{ marginBottom: 10 }}>
         <input
@@ -302,7 +251,6 @@ export default function InvoiceEditor(props: {
         />
       </label>
 
-      {/* Bill Client */}
       <div style={{ fontWeight: 900, marginBottom: 8 }}>Bill Client</div>
 
       <div className="row gap8" style={{ marginBottom: 10 }}>
@@ -329,7 +277,6 @@ export default function InvoiceEditor(props: {
         />
       </div>
 
-      {/* LABOR TABLE */}
       <div style={{ fontWeight: 900, marginTop: 8, marginBottom: 6 }}>Labor</div>
       <div className="mutedSmall" style={{ marginBottom: 8 }}>
         Amount auto-calculates: hours × rate
@@ -358,14 +305,12 @@ export default function InvoiceEditor(props: {
               value={r.description || r.name || ""}
               onChange={(e) => setLabor(i, { description: e.target.value })}
             />
-
             <input
               className="input"
               placeholder="hr"
               value={r.unit || "hr"}
               onChange={(e) => setLabor(i, { unit: e.target.value })}
             />
-
             <input
               className="input"
               type="number"
@@ -373,7 +318,6 @@ export default function InvoiceEditor(props: {
               value={String(qty)}
               onChange={(e) => setLabor(i, { hours: parseFloat(e.target.value || "0") })}
             />
-
             <input
               className="input"
               type="number"
@@ -381,7 +325,6 @@ export default function InvoiceEditor(props: {
               value={String(unitPrice)}
               onChange={(e) => setLabor(i, { rate: parseFloat(e.target.value || "0") })}
             />
-
             <label className="invChk">
               <input
                 type="checkbox"
@@ -390,9 +333,7 @@ export default function InvoiceEditor(props: {
               />
               <span>Tax</span>
             </label>
-
             <div className="invAmount">{amountCell(amount)}</div>
-
             <button className="btn btnGhost" onClick={() => removeLabor(i)}>
               Remove
             </button>
@@ -406,7 +347,6 @@ export default function InvoiceEditor(props: {
         </button>
       </div>
 
-      {/* PARTS TABLE */}
       <div style={{ fontWeight: 900, marginTop: 14, marginBottom: 6 }}>Parts & Materials</div>
       <div className="mutedSmall" style={{ marginBottom: 8 }}>
         Amount auto-calculates: qty × unit price
@@ -436,14 +376,12 @@ export default function InvoiceEditor(props: {
               value={description}
               onChange={(e) => setPart(i, { description: e.target.value })}
             />
-
             <input
               className="input"
               placeholder="ea"
               value={r.unit || "ea"}
               onChange={(e) => setPart(i, { unit: e.target.value })}
             />
-
             <input
               className="input"
               type="number"
@@ -451,7 +389,6 @@ export default function InvoiceEditor(props: {
               value={String(qty)}
               onChange={(e) => setPart(i, { qty: parseFloat(e.target.value || "0") })}
             />
-
             <input
               className="input"
               type="number"
@@ -459,7 +396,6 @@ export default function InvoiceEditor(props: {
               value={String(unitPrice)}
               onChange={(e) => setPart(i, { unit_price: parseFloat(e.target.value || "0") })}
             />
-
             <label className="invChk">
               <input
                 type="checkbox"
@@ -468,9 +404,7 @@ export default function InvoiceEditor(props: {
               />
               <span>Tax</span>
             </label>
-
             <div className="invAmount">{amountCell(amount)}</div>
-
             <button className="btn btnGhost" onClick={() => removePart(i)}>
               Remove
             </button>
@@ -484,9 +418,7 @@ export default function InvoiceEditor(props: {
         </button>
       </div>
 
-      {/* Totals */}
       <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 10 }}>
-        {/* ✅ Labeled inputs (always visible) */}
         <div className="row gap8" style={{ marginBottom: 8 }}>
           <label style={{ flex: 1 }}>
             <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Discount</div>

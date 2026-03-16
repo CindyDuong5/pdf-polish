@@ -63,18 +63,18 @@ export default function InvoicePanel(props: {
         const next = (data?.draft || data?.final || null) as InvoiceFields | null;
         if (!alive) return;
 
-        const computed = next ? recomputeInvoiceTotals(next) : null;
-        setFields(computed);
+        // ✅ Keep BuildOps / mapper values exactly as returned
+        setFields(next);
 
         const defaultTo =
-          (computed?.billClient_email || "").trim() ||
+          (next?.billClient_email || "").trim() ||
           (props.selected?.customer_email || "").trim() ||
           "";
 
         setToInput(defaultTo);
         setToDirty(false);
 
-        setSubjectInput(buildDefaultInvoiceSubject(computed));
+        setSubjectInput(buildDefaultInvoiceSubject(next));
         setSubjectDirty(false);
       } catch (e: any) {
         if (!alive) return;
@@ -139,7 +139,8 @@ export default function InvoicePanel(props: {
     setSavingFinal(true);
 
     try {
-      await saveFinalInvoice(props.selectedId, recomputeInvoiceTotals(fields));
+      // ✅ Save exactly what user currently sees
+      await saveFinalInvoice(props.selectedId, fields);
       setMsg("Saved Final ✅");
 
       const updatedLinks = await waitForFinalPdf(props.selectedId);
@@ -174,9 +175,10 @@ export default function InvoicePanel(props: {
         force_over_limit: force,
       });
 
+      // ✅ Only update payment_url, do not touch totals
       setFields((prev) =>
         prev
-          ? recomputeInvoiceTotals({
+          ? ({
               ...prev,
               payment_url: res?.payment_url || "",
             } as InvoiceFields)
