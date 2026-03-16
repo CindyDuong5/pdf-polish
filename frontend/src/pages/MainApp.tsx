@@ -158,7 +158,13 @@ export default function MainApp() {
   }, [selected?.styled_draft_s3_key]);
 
   async function onRestyle() {
-    if (!selectedId) return;
+    if (!selectedId || !selected) return;
+
+    if (!isQuoteDoc(selected)) {
+      setErr("Restyle is only available for quote documents.");
+      return;
+    }
+
     setLoading(true);
     setMsg(null);
     setErr(null);
@@ -322,9 +328,15 @@ export default function MainApp() {
               </div>
 
               <div className="row gap8">
-                <button className="btn btnPrimary" disabled={loading || !selectedId} onClick={onRestyle}>
-                  {loading ? "Working..." : "Restyle"}
-                </button>
+                {isQuoteDoc(selected) ? (
+                  <button
+                    className="btn btnPrimary"
+                    disabled={loading || !selectedId}
+                    onClick={onRestyle}
+                  >
+                    {loading ? "Working..." : "Restyle Quote"}
+                  </button>
+                ) : null}
               </div>
             </div>
 
