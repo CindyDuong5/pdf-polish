@@ -14,7 +14,7 @@
         <!-- Header -->
         <tr>
           <td style="background:#000;padding:32px 22px;color:#fff;">
-            <table role="presentation" width="100%">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td align="left" style="width:50%;">
                   <img src="https://mainline-certificates.s3.ca-central-1.amazonaws.com/email-assets/Mainline-Primary-Logo-White.png"
@@ -52,14 +52,14 @@
               Please review the details below. You can view the quote and then approve or reject it.
             </p>
 
-            <!-- Details -->
-            <table role="presentation" width="100%" style="margin:10px 0 10px 0;">
+            <!-- Details + View Quote -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:10px 0 4px 0;">
               <tr>
                 <td style="width:50%;vertical-align:top;padding-right:10px;">
                   {% if property_name %}
                   <div style="margin:0 0 10px 0;">
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Property</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;">{{ property_name }}</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">{{ property_name }}</div>
                   </div>
                   {% endif %}
                 </td>
@@ -68,44 +68,32 @@
                   {% if company_name %}
                   <div style="margin:0 0 10px 0;">
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Company</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;">{{ company_name }}</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">{{ company_name }}</div>
                   </div>
                   {% endif %}
                 </td>
               </tr>
-            </table>
 
-            <!-- Row 1: View Quote / Deficiency Report -->
-            <table role="presentation" width="100%" style="margin:14px 0 4px 0;">
+              {% if quote_url %}
               <tr>
-                <td style="width:50%;vertical-align:top;padding-right:8px;">
-                  {% if quote_url %}
+                <td colspan="2" style="padding-top:12px;">
                   <a href="{{ quote_url }}" target="_blank" rel="noopener noreferrer"
-                    style="display:inline-block;width:200px;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    style="display:inline-block;width:100%;text-align:center;background:#fff;color:#111;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;border:2px solid #111;">
                     View Quote
                   </a>
-                  {% endif %}
-                </td>
-
-                <td style="width:50%;vertical-align:top;padding-left:8px;">
-                  {% if deficiency_report_link %}
-                  <a href="{{ deficiency_report_link }}" target="_blank" rel="noopener noreferrer"
-                    style="display:inline-block;width:200px;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
-                    Deficiency Report
-                  </a>
-                  {% endif %}
                 </td>
               </tr>
+              {% endif %}
             </table>
 
-            <!-- Row 2: Approve / Reject -->
+            <!-- Approve / Reject -->
             {% if approve_url or reject_url %}
-            <table role="presentation" width="100%" style="margin:14px 0 4px 0;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0 4px 0;">
               <tr>
                 <td style="width:50%;vertical-align:top;padding-right:8px;">
                   {% if approve_url %}
                   <a href="{{ approve_url }}" target="_blank" rel="noopener noreferrer"
-                    style="display:inline-block;width:200px;text-align:center;background:#16a34a;color:#fff;text-decoration:none;font-weight:800;padding:12px 0;border-radius:10px;">
+                    style="display:inline-block;width:100%;text-align:center;background:#dc2626;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
                     Approve
                   </a>
                   {% endif %}
@@ -113,7 +101,7 @@
                 <td style="width:50%;vertical-align:top;padding-left:8px;">
                   {% if reject_url %}
                   <a href="{{ reject_url }}" target="_blank" rel="noopener noreferrer"
-                    style="display:inline-block;width:200px;text-align:center;background:#dc2626;color:#fff;text-decoration:none;font-weight:800;padding:12px 0;border-radius:10px;">
+                    style="display:inline-block;width:100%;text-align:center;background:#e5e7eb;color:#111;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
                     Reject
                   </a>
                   {% endif %}
@@ -129,7 +117,21 @@
 
             <!-- Support -->
             <div style="margin:18px 0 10px 0;padding:14px 16px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:10px;font-size:14px;color:#374151;">
-              Need help? Reply to this email or call <a href="tel:+14163050704" style="color:#2563eb;text-decoration:underline;">416-305-0704</a>.
+
+              {% if additional_document_names and additional_document_names|length > 0 %}
+              <div style="margin-bottom:10px;">
+                <strong>Additional Documents:</strong>
+                <ul style="margin:6px 0 0 18px;padding:0;">
+                  {% for name in additional_document_names %}
+                  <li style="margin:4px 0;">{{ name }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+
+              Need help? Reply to this email or call 
+              <a href="tel:+14163050704" style="color:#2563eb;text-decoration:underline;">416-305-0704</a>.
+
             </div>
 
             <!-- Review -->

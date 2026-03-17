@@ -4,6 +4,7 @@ import PreviewCard from "../../components/PreviewCard";
 import ServiceQuoteEditor from "../../components/ServiceQuoteEditor";
 import type { DocRow, Links, ServiceQuoteFields } from "../../types";
 import { sendEmail, saveFinal, getFields, getLinks, friendlyErrorMessage } from "../../api";
+import AdditionalDocumentsPanel from "../../components/AdditionalDocumentsPanel";
 import { withComputedTotals } from "./totals";
 
 export default function ServiceQuotePanel(props: {
@@ -21,7 +22,6 @@ export default function ServiceQuotePanel(props: {
   const [bccInput, setBccInput] = useState("");
   const [subjectInput, setSubjectInput] = useState("");
   const [subjectDirty, setSubjectDirty] = useState(false);
-  const [deficiencyReportLink, setDeficiencyReportLink] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -140,7 +140,6 @@ export default function ServiceQuotePanel(props: {
         cc,
         bcc,
         client_email: toEmail,
-        deficiency_report_link: deficiencyReportLink.trim() || undefined,
         subject: subjectInput.trim() || undefined,
       });
 
@@ -226,18 +225,6 @@ export default function ServiceQuotePanel(props: {
 
             <label style={{ display: "block", marginBottom: 10 }}>
               <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
-                Deficiency Report Link (optional)
-              </div>
-              <input
-                className="input"
-                value={deficiencyReportLink}
-                onChange={(e) => setDeficiencyReportLink(e.target.value)}
-                placeholder="Paste deficiency report URL here"
-              />
-            </label>
-
-            <label style={{ display: "block", marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
                 CC (comma or semicolon separated)
               </div>
               <input
@@ -259,8 +246,15 @@ export default function ServiceQuotePanel(props: {
                 placeholder="bcc1@email.com, bcc2@email.com"
               />
             </label>
+            
+            <AdditionalDocumentsPanel
+              docId={props.selectedId}
+              disabled={sending || props.loading || !props.selectedId}
+              title="Additional Documents"
+              helpText="These files will be attached to the quote email."
+            />
 
-            <div className="row gap8">
+            <div className="row gap8" style={{ marginTop: 12 }}>
               <button
                 className="btn btnPrimary"
                 onClick={onSendEmail}

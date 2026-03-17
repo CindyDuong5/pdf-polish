@@ -44,6 +44,32 @@ class InboundEmail(Base):
     documents = relationship("Document", back_populates="inbound_email")
 
 
+class DocumentAdditionalDocument(Base):
+    __tablename__ = "document_additional_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)  # upload | url
+
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(Text)
+    content_type: Mapped[str | None] = mapped_column(String(255))
+    file_size: Mapped[int | None] = mapped_column(BigInteger)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    document = relationship("Document", back_populates="additional_documents")
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -54,10 +80,7 @@ class Document(Base):
         ForeignKey("inbound_emails.id")
     )
 
-    # INVOICE | SERVICE_QUOTE | PROJECT_QUOTE | JOB_REPORT | OTHER
     doc_type: Mapped[str] = mapped_column(String(64), nullable=False, default="OTHER")
-
-    # Address / property name (single field is enough)
     property_address: Mapped[str | None] = mapped_column(Text)
 
     customer_name: Mapped[str | None] = mapped_column(Text)
@@ -67,12 +90,10 @@ class Document(Base):
     quote_number: Mapped[str | None] = mapped_column(String(64))
     job_report_number: Mapped[str | None] = mapped_column(String(64))
 
-    # S3 keys (not full URLs)
     original_s3_key: Mapped[str] = mapped_column(Text, nullable=False)
     styled_draft_s3_key: Mapped[str | None] = mapped_column(Text)
     final_s3_key: Mapped[str | None] = mapped_column(Text)
 
-    # NEW | READY_FOR_REVIEW | NEEDS_EDIT | FINALIZED | SENT | ERROR
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="NEW")
     error: Mapped[str | None] = mapped_column(Text)
 
@@ -85,6 +106,11 @@ class Document(Base):
     inbound_email = relationship("InboundEmail", back_populates="documents")
     send_jobs = relationship("SendJob", back_populates="document")
     quote_decision = relationship("QuoteDecision", back_populates="document", uselist=False)
+    additional_documents = relationship(
+        "DocumentAdditionalDocument",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("idx_documents_doc_type", "doc_type"),
@@ -94,7 +120,7 @@ class Document(Base):
         Index("idx_documents_quote_number", "quote_number"),
         Index("idx_documents_job_report_number", "job_report_number"),
     )
-
+    
 
 class SendJob(Base):
     __tablename__ = "send_jobs"

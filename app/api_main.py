@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Literal, List, Optional
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
@@ -20,6 +20,14 @@ from app.services.keys import final_key_for
 from app.services.pdf_stamp import stamp_pdf
 from app.services.styling_service import ensure_draft, _mark_older_quote_rows_replaced
 from app.services.service_quote_editor import json_to_service_quote, normalize_service_quote_fields
+from app.services.additional_documents import (
+    list_additional_documents,
+    create_uploaded_additional_document,
+    create_url_additional_document,
+    delete_additional_document,
+    build_additional_email_attachments,
+)
+
 from app.storage.s3_storage import get_storage
 from app.styling.service_quote.renderer import render_service_quote
 from app.api_invoice import router as invoice_router
@@ -598,9 +606,11 @@ class SendEmailIn(BaseModel):
     client_email: Optional[EmailStr] = None
     cc: Optional[List[EmailStr]] = None
     bcc: Optional[List[EmailStr]] = None
-    deficiency_report_link: Optional[str] = None
     subject: Optional[str] = None
 
+class AddAdditionalDocumentByUrlIn(BaseModel):
+    file_url: str
+    display_name: str
 
 def _is_reviewable_quote(doc_type: str) -> bool:
     dt = (doc_type or "").upper()
@@ -703,7 +713,6 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         if not to_email:
             raise HTTPException(status_code=400, detail="No client email (customer_email is empty)")
 
-        deficiency_report_link = (body.deficiency_report_link or "").strip() or None
         storage = get_storage()
 
         key = rowd["final_s3_key"] or rowd["styled_draft_s3_key"] or rowd["original_s3_key"]
@@ -720,6 +729,10 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             inline=True,
         )
         pdf_bytes = storage.download_bytes(key)
+
+        additional_docs = list_additional_documents(db, real_doc_id)
+        additional_attachments = build_additional_email_attachments(db, storage, real_doc_id)
+        additional_document_names = [str(x.get("display_name") or "").strip() for x in additional_docs if str(x.get("display_name") or "").strip()]
 
         customer_name = (rowd.get("customer_name") or "").strip()
         greeting = f"Good day {customer_name}," if customer_name else "Good day,"
@@ -769,7 +782,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "quote_url": file_url,
                 "approve_url": approve_url,
                 "reject_url": reject_url,
-                "deficiency_report_link": deficiency_report_link,
+                "additional_document_names": additional_document_names,
                 "now": "",
             }
 
@@ -779,8 +792,16 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 f"{greeting}\n\n"
                 f"Here is your Quote #{display_quote_number}.\n"
                 f"View Quote: {file_url}\n\n"
-                + (f"Deficiency Report: {deficiency_report_link}\n\n" if deficiency_report_link else "")
-                + f"Approve: {approve_url}\n"
+            )
+
+            if additional_document_names:
+                text_body += "Additional Documents:\n"
+                for name in additional_document_names:
+                    text_body += f"- {name}\n"
+                text_body += "\n"
+
+            text_body += (
+                f"Approve: {approve_url}\n"
                 f"Reject: {reject_url}\n\n"
                 "Need help? Reply to this email or call 416-305-0704.\n"
             )
@@ -802,6 +823,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "reviewable": False,
                 "approve_url": None,
                 "reject_url": None,
+                "additional_document_names": additional_document_names,
             }
 
             html_body = render_html(template_name, context)
@@ -810,9 +832,17 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 f"{greeting}\n\n"
                 f"Please find the document attached.\n"
                 f"Link: {file_url}\n\n"
-                + (f"Pay by Credit Card: {payment_url}\n\n" if payment_url else "")
-                + "If you have any questions, reply to this email.\n"
             )
+            if additional_document_names:
+                text_body += "Additional Documents:\n"
+                for name in additional_document_names:
+                    text_body += f"- {name}\n"
+                text_body += "\n"
+
+            if payment_url:
+                text_body += f"Pay by Credit Card: {payment_url}\n\n"
+
+            text_body += "If you have any questions, reply to this email.\n"
 
         cc_list = [str(x) for x in (body.cc or [])]
         bcc_list = [str(x) for x in (body.bcc or [])]
@@ -829,7 +859,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                     filename=filename,
                     content_type="application/pdf",
                     data=pdf_bytes,
-                )
+                ),
+                *additional_attachments,
             ],
         )
 
@@ -1121,3 +1152,52 @@ def get_quote_decision(doc_id: str, token: str):
         "reject_reason": rowd.get("quote_reject_reason"),
         "decided_at": rowd.get("quote_responded_at"),
     }
+
+# Additional documents endpoints
+@app.get("/api/documents/{doc_id}/additional-documents")
+def api_list_additional_documents(doc_id: str):
+    with SessionLocal() as db:
+        items = list_additional_documents(db, doc_id)
+        return {"items": items}
+    
+@app.post("/api/documents/{doc_id}/additional-documents/upload")
+async def api_upload_additional_document(
+    doc_id: str,
+    file: UploadFile = File(...),
+    display_name: str = Form(...),
+):
+    storage = get_storage()
+    with SessionLocal() as db:
+        item = await create_uploaded_additional_document(
+            db=db,
+            storage=storage,
+            doc_id=doc_id,
+            display_name=display_name,
+            upload_file=file,
+        )
+        return {"ok": True, "item": item}
+    
+@app.post("/api/documents/{doc_id}/additional-documents/by-url")
+def api_add_additional_document_by_url(doc_id: str, body: AddAdditionalDocumentByUrlIn):
+    storage = get_storage()
+    with SessionLocal() as db:
+        item = create_url_additional_document(
+            db=db,
+            storage=storage,
+            doc_id=doc_id,
+            display_name=body.display_name,
+            file_url=body.file_url,
+        )
+        return {"ok": True, "item": item}
+    
+@app.delete("/api/documents/{doc_id}/additional-documents/{additional_doc_id}")
+def api_delete_additional_document(doc_id: str, additional_doc_id: str):
+    storage = get_storage()
+    with SessionLocal() as db:
+        delete_additional_document(
+            db=db,
+            storage=storage,
+            doc_id=doc_id,
+            additional_doc_id=additional_doc_id,
+        )
+        return {"ok": True}

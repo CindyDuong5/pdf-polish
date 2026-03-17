@@ -24,18 +24,30 @@ class S3Client:
         if not self.bucket:
             raise RuntimeError("S3_BUCKET not set in .env")
 
-    def upload_pdf_bytes(self, key: str, data: bytes) -> None:
+    def upload_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str | None = None,
+        content_disposition: str | None = None,
+    ) -> None:
+        extra: dict = {}
+        if content_type:
+            extra["ContentType"] = content_type
+        if content_disposition:
+            extra["ContentDisposition"] = content_disposition
+
         self.s3.put_object(
             Bucket=self.bucket,
             Key=key,
             Body=data,
-            ContentType="application/pdf",
+            **extra,
         )
 
+    def upload_pdf_bytes(self, key: str, data: bytes) -> None:
+        self.upload_bytes(key=key, data=data, content_type="application/pdf")
+
     def copy_pdf(self, src_key: str, dst_key: str) -> None:
-        """
-        Server-side copy within the same bucket.
-        """
         self.s3.copy_object(
             Bucket=self.bucket,
             Key=dst_key,
@@ -50,7 +62,16 @@ class S3Client:
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=int(expires_seconds),
         )
-    
-    def download_pdf_bytes(self, key: str) -> bytes:
+
+    def download_bytes(self, key: str) -> bytes:
         obj = self.s3.get_object(Bucket=self.bucket, Key=key)
         return obj["Body"].read()
+
+    def download_pdf_bytes(self, key: str) -> bytes:
+        return self.download_bytes(key)
+
+    def delete_object(self, key: str) -> None:
+        self.s3.delete_object(Bucket=self.bucket, Key=key)
+
+    def head_object(self, key: str) -> dict:
+        return self.s3.head_object(Bucket=self.bucket, Key=key)

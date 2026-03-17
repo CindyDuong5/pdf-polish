@@ -12,6 +12,7 @@ import {
   friendlyErrorMessage,
 } from "../../api";
 import { recomputeInvoiceTotals } from "./totals";
+import AdditionalDocumentsPanel from "../../components/AdditionalDocumentsPanel";
 
 export default function InvoicePanel(props: {
   selected: DocRow;
@@ -264,7 +265,7 @@ export default function InvoicePanel(props: {
             <div className="cardTitle">Send Invoice</div>
             <div className="mutedSmall">Email + payment link</div>
           </div>
-
+          
           <div style={{ padding: 12 }}>
             <label style={{ display: "block", marginBottom: 10 }}>
               <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>To</div>
@@ -348,20 +349,29 @@ export default function InvoicePanel(props: {
                 <div className="mutedSmall">No payment link available yet.</div>
               )}
             </div>
+            
+            <AdditionalDocumentsPanel
+              docId={props.selectedId}
+              disabled={sending || savingFinal || props.loading || !props.selectedId}
+              title="Additional Documents"
+              helpText="These files will be attached to the invoice email."
+            />
 
-            <button
-              className="btn btnPrimary"
-              onClick={onSendInvoice}
-              disabled={
-                sending ||
-                savingFinal ||
-                props.loading ||
-                !props.selectedId ||
-                !toInput.trim()
-              }
-            >
-              {sending ? "Sending..." : "📧 Send Invoice"}
-            </button>
+            <div className="row gap8" style={{ marginTop: 12 }}>
+              <button
+                className="btn btnPrimary"
+                onClick={onSendInvoice}
+                disabled={
+                  sending ||
+                  savingFinal ||
+                  props.loading ||
+                  !props.selectedId ||
+                  !toInput.trim()
+                }
+              >
+                {sending ? "Sending..." : "📧 Send Invoice"}
+              </button>
+            </div>
           </div>
         </div>
       </div>

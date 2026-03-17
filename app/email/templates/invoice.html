@@ -51,71 +51,82 @@
                 Here is your <strong>Invoice</strong>.
               {% endif %}
               You can view the invoice using the button below.
-              {% if payment_url %}You may also pay by credit card.{% endif %}
+              {% if payment_url %} You may also pay by credit card.{% endif %}
             </p>
 
-            <!-- Details + Buttons -->
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:10px 0 6px 0;">
+            <!-- Details Row -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:10px 0 0 0;">
               <tr>
-                <!-- LEFT: Property + View Invoice -->
-                <td style="width:50%;vertical-align:bottom;padding-right:10px;">
-
+                <td style="width:50%;vertical-align:top;padding-right:10px;">
                   {% if property_name %}
-                  <div style="margin:0 0 10px 0;">
+                  <div>
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Property</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;">{{ property_name }}</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">{{ property_name }}</div>
                   </div>
                   {% elif property_address %}
-                  <div style="margin:0 0 10px 0;">
+                  <div>
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Property</div>
                     <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">
                       {{ property_address | replace('\n','<br/>') | safe }}
                     </div>
                   </div>
                   {% endif %}
-
-                  {% if view_url %}
-                  <table role="presentation" cellpadding="0" cellspacing="0"><tr><td>
-                    <a href="{{ view_url }}" target="_blank" rel="noopener noreferrer"
-                       style="display:inline-block;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 22px;border-radius:10px;">
-                      View Invoice
-                    </a>
-                  </td></tr></table>
-                  {% endif %}
-
                 </td>
 
-                <!-- RIGHT: Customer + Pay button -->
-                <td style="width:50%;vertical-align:bottom;padding-left:10px;">
-
+                <td style="width:50%;vertical-align:top;padding-left:10px;">
                   {% if customer_name %}
-                  <div style="margin:0 0 10px 0;">
+                  <div>
                     <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Customer</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;">{{ customer_name }}</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">{{ customer_name }}</div>
                   </div>
                   {% endif %}
-
-                  {% if payment_url %}
-                  <table role="presentation" cellpadding="0" cellspacing="0"><tr><td>
-                    <a href="{{ payment_url }}" target="_blank" rel="noopener noreferrer"
-                       style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;font-weight:800;padding:14px 22px;border-radius:10px;">
-                      Pay by Credit Card
-                    </a>
-                  </td></tr></table>
-                  {% endif %}
-
                 </td>
               </tr>
             </table>
 
-            <!-- Attachment note -->
+            <!-- Buttons Row -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0 6px 0;">
+              <tr>
+                <td style="width:50%;vertical-align:top;padding-right:10px;">
+                  {% if view_url %}
+                  <a href="{{ view_url }}" target="_blank" rel="noopener noreferrer"
+                     style="display:inline-block;width:100%;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    View Invoice
+                  </a>
+                  {% endif %}
+                </td>
+
+                <td style="width:50%;vertical-align:top;padding-left:10px;">
+                  {% if payment_url %}
+                  <a href="{{ payment_url }}" target="_blank" rel="noopener noreferrer"
+                     style="display:inline-block;width:100%;text-align:center;background:#16a34a;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    Pay by Credit Card
+                  </a>
+                  {% else %}
+                  <div style="height:50px;line-height:50px;">&nbsp;</div>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+
+            <!-- Additional Documents -->
+            {% if additional_document_names and additional_document_names|length > 0 %}
+            <div style="margin:16px 0 6px 0;font-size:14px;color:#4b5563;">
+              <strong>Additional Documents:</strong>
+              <ul style="margin:8px 0 0 18px;padding:0;color:#4b5563;">
+                {% for name in additional_document_names %}
+                <li style="margin:4px 0;">{{ name }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% else %}
             <p style="margin:16px 0 6px 0;font-size:14px;color:#4b5563;">
               Attached is your invoice PDF for your records. If you have any questions, reply to this email.
             </p>
+            {% endif %}
 
             <!-- Payment Info -->
             <div style="margin:18px 0 10px 0;padding:14px 16px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:10px;font-size:14px;color:#374151;line-height:1.5;">
-
               <strong>Payment Options</strong><br/>
 
               Pay securely using the payment link above.<br/>
@@ -128,7 +139,6 @@
               <span style="font-size:12px;color:#6b7280;">
                 Please reference your invoice number with payment. Questions? Call 647-325-8577.
               </span>
-
             </div>
 
             <!-- Review -->

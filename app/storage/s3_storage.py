@@ -50,6 +50,13 @@ class S3Storage:
             ContentType="application/pdf",
         )
 
+    def upload_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
+        self.s3.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=data,
+            ContentType=content_type or "application/octet-stream",
+        )
     def copy_object(self, src_key: str, dst_key: str) -> None:
         """
         Server-side copy (no download/re-upload).

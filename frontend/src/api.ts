@@ -179,3 +179,73 @@ export function friendlyErrorMessage(e: any): string {
 
   return msg;
 }
+
+// Additional documents
+export type AdditionalDocumentItem = {
+  id: string;
+  document_id: string;
+  display_name: string;
+  source_type: "upload" | "url";
+  storage_key: string;
+  original_filename?: string | null;
+  content_type?: string | null;
+  file_size?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export async function listAdditionalDocuments(
+  docId: string
+): Promise<{ items: AdditionalDocumentItem[] }> {
+  return httpJson(`${API_BASE}/api/documents/${docId}/additional-documents`);
+}
+
+export async function uploadAdditionalDocument(
+  docId: string,
+  file: File,
+  displayName: string
+): Promise<{ ok: boolean; item: AdditionalDocumentItem }> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("display_name", displayName);
+
+  const res = await fetch(`${API_BASE}/api/documents/${docId}/additional-documents/upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {}
+
+  if (!res.ok) {
+    throw new Error(data?.detail || text || res.statusText);
+  }
+
+  return data;
+}
+
+export async function addAdditionalDocumentByUrl(
+  docId: string,
+  payload: { file_url: string; display_name: string }
+): Promise<{ ok: boolean; item: AdditionalDocumentItem }> {
+  return httpJson(`${API_BASE}/api/documents/${docId}/additional-documents/by-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteAdditionalDocument(
+  docId: string,
+  additionalDocId: string
+): Promise<{ ok: boolean }> {
+  return httpJson(
+    `${API_BASE}/api/documents/${docId}/additional-documents/${additionalDocId}`,
+    {
+      method: "DELETE",
+    }
+  );
+}

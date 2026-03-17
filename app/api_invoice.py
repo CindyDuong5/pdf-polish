@@ -23,6 +23,10 @@ from app.email.template_router import (
     build_subject,
 )
 from app.services.payment_link import get_invoice_payment_link
+from app.services.additional_documents import (
+    list_additional_documents,
+    build_additional_email_attachments,
+)
 from app.styling.invoice.build_data import build_invoice_pdf_data_from_number
 from app.styling.invoice.renderer import render_invoice_styled_draft
 
@@ -457,15 +461,17 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         )
 
         try:
-            r = requests.get(view_url, timeout=60)
-            r.raise_for_status()
-            pdf_bytes = r.content
+            pdf_bytes = storage.download_bytes(final_key)
         except Exception as e:
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to download PDF for attachment: {e}",
             )
 
+        additional_docs = list_additional_documents(db, doc_id)
+        additional_attachments = build_additional_email_attachments(db, storage, doc_id)
+        additional_document_names = [str(x.get("display_name") or "").strip() for x in additional_docs if str(x.get("display_name") or "").strip()]
+        
         kind = email_kind_for("INVOICE")
         tpl = template_for_kind(kind)
 
@@ -480,12 +486,19 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 "property_address": property_address or "",
                 "view_url": view_url,
                 "payment_url": payment_url or "",
+                "additional_document_names": additional_document_names,
             },
         )
 
-        text_body = f"Invoice #{invoice_number}\nView: {view_url}\n" + (
-            f"Pay by Credit Card: {payment_url}\n" if payment_url else ""
-        )
+        text_body = f"Invoice #{invoice_number}\nView: {view_url}\n"
+
+        if additional_document_names:
+            text_body += "\nAdditional Documents:\n"
+            for name in additional_document_names:
+                text_body += f"- {name}\n"
+
+        if payment_url:
+            text_body += f"\nPay by Credit Card: {payment_url}\n"
 
         send_email_brevo_smtp(
             to_email=to_email,
@@ -500,6 +513,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                     content_type="application/pdf",
                     data=pdf_bytes,
                 ),
+                *additional_attachments,
             ),
         )
         sent_cc = ", ".join(cc) if cc else None
