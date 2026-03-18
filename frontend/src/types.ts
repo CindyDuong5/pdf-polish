@@ -74,3 +74,16 @@ export type ServiceQuoteFields = {
 
   [key: string]: any;
 };
+
+export type DocumentHistoryRow = {
+  id: string;
+  doc_type: string | null;
+  status: string | null;
+  invoice_number: string | null;
+  quote_number: string | null;
+  job_report_number: string | null;
+  final_s3_key?: string | null;
+  final_url?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getLinks, listDocuments, restyleDoc, buildInvoiceByNumber } from "../api";
 import type { DocRow, Links } from "../types";
 import DocumentPanel from "../panels/DocumentPanel";
+import { useNavigate } from "react-router-dom";
 import "../styles.css";
 
 function isQuoteDoc(row: DocRow) {
@@ -46,8 +47,6 @@ export default function MainApp() {
   const [invoiceInput, setInvoiceInput] = useState("");
   const [generating, setGenerating] = useState(false);
 
-  const [status, setStatus] = useState("");
-
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -60,11 +59,12 @@ export default function MainApp() {
     [items, selectedId]
   );
 
+  const navigate = useNavigate();
+
   async function refreshList(preferredSelectedId?: string | null): Promise<DocRow[]> {
     setErr(null);
 
     const data = await listDocuments({
-      status: status || undefined,
       limit: 50,
     });
 
@@ -263,17 +263,11 @@ export default function MainApp() {
           </div>
 
           <div className="row gap8">
-            <input
-              className="input"
-              placeholder="Status (optional)"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            />
             <button
               className="btn btnGhost"
-              onClick={() => refreshList().catch((e) => setErr(String(e)))}
+              onClick={() => navigate("/history")}
             >
-              Refresh
+              Document History
             </button>
           </div>
 

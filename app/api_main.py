@@ -149,6 +149,94 @@ def list_documents(
         return {"items": [dict(r) for r in rows]}
 
 
+@app.get("/api/documents/history")
+def list_document_history(
+    q: str | None = None,
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    where = [
+        "COALESCE(status, '') <> 'REPLACED'",
+        "("
+        "doc_type ILIKE '%QUOTE%' "
+        "OR doc_type ILIKE '%INVOICE%'"
+        ")",
+    ]
+    params: dict = {"limit": limit}
+
+    if q:
+        where.append(
+            "("
+            "invoice_number ILIKE '%' || :q || '%' OR "
+            "quote_number ILIKE '%' || :q || '%'"
+            ")"
+        )
+        params["q"] = q.strip()
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    sql = text(
+        f"""
+        SELECT
+          id,
+          doc_type,
+          status,
+          invoice_number,
+          quote_number,
+          job_report_number,
+          final_s3_key,
+          created_at,
+          updated_at
+        FROM public.documents
+        {where_sql}
+        ORDER BY created_at DESC
+        LIMIT :limit
+        """
+    )
+
+    with SessionLocal() as db:
+        rows = db.execute(sql, params).mappings().all()
+        storage = get_storage()
+
+        items = []
+        for r in rows:
+            row = dict(r)
+
+            label = (
+                row.get("invoice_number")
+                or row.get("quote_number")
+                or row.get("job_report_number")
+                or row.get("id")
+            )
+            safe_doc_type = (row.get("doc_type") or "DOCUMENT").replace(" ", "_")
+            filename = f"{safe_doc_type}_{label}.pdf"
+
+            final_key = row.get("final_s3_key")
+            final_url = None
+            if final_key:
+                final_url = storage.presign_get_url(
+                    key=final_key,
+                    expires_seconds=3600,
+                    download_filename=filename,
+                    inline=True,
+                )
+
+            items.append(
+                {
+                    "id": row.get("id"),
+                    "doc_type": row.get("doc_type"),
+                    "status": row.get("status"),
+                    "invoice_number": row.get("invoice_number"),
+                    "quote_number": row.get("quote_number"),
+                    "job_report_number": row.get("job_report_number"),
+                    "final_s3_key": final_key,
+                    "final_url": final_url,
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+
+        return {"items": items}
+    
 @app.get("/api/documents/{doc_id}")
 def get_document(doc_id: str):
     sql = text("SELECT * FROM public.documents WHERE id = :id")
@@ -264,7 +352,6 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
             "styled_draft": {"key": rowd["styled_draft_s3_key"], "url": url_for(rowd["styled_draft_s3_key"])},
             "final": {"key": rowd["final_s3_key"], "url": url_for(rowd["final_s3_key"])},
         }
-
 
 @app.post("/api/documents/{doc_id}/finalize")
 def finalize_document(
@@ -1201,3 +1288,4 @@ def api_delete_additional_document(doc_id: str, additional_doc_id: str):
             additional_doc_id=additional_doc_id,
         )
         return {"ok": True}
+    

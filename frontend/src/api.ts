@@ -249,3 +249,14 @@ export async function deleteAdditionalDocument(
     }
   );
 }
+
+export async function listDocumentHistory(params?: { limit?: number; q?: string }) {
+  const usp = new URLSearchParams();
+  usp.set("limit", String(params?.limit ?? 300));
+
+  if (params?.q?.trim()) {
+    usp.set("q", params.q.trim());
+  }
+
+  return httpJson(`${API_BASE}/api/documents/history?${usp.toString()}`);
+}
