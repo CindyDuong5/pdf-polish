@@ -264,7 +264,7 @@ export default function MainApp() {
 
           <div className="row gap8">
             <button
-              className="btn btnGhost"
+              className="btn btnHistory"
               onClick={() => navigate("/history")}
             >
               Document History

@@ -427,3 +427,41 @@ body{
 .historySearchBar .input {
   max-width: 360px;
 }
+
+.btnHistory {
+  background: #d35b3a;
+  color: #fff;
+  border: 1px solid #d35b3a;
+  font-weight: 700;
+}
+
+.btnHistory:hover {
+  background: #bb4d30;
+  border-color: #bb4d30;
+}
+
+.btnHistory:active {
+  transform: translateY(1px);
+}
+
+.inlineError {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #f3c2c2;
+  background: #fff1f1;
+  color: #b42318;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.inlineSuccess {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #b7dfc8;
+  background: #eefaf2;
+  color: #166534;
+  font-size: 14px;
+  font-weight: 600;
+}

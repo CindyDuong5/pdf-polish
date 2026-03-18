@@ -453,12 +453,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         bcc = body.bcc_emails or body.bcc or []
         bcc = [e.strip() for e in bcc if isinstance(e, str) and e.strip()]
 
-        view_url = storage.presign_get_url(
-            key=final_key,
-            expires_seconds=7 * 24 * 3600,
-            download_filename=f"INVOICE_{invoice_number or doc_id}.pdf",
-            inline=True,
-        )
+        view_url = storage.public_url(final_key)
 
         try:
             pdf_bytes = storage.download_bytes(final_key)

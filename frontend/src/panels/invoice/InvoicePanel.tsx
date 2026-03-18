@@ -36,6 +36,9 @@ export default function InvoicePanel(props: {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  const [sendMsg, setSendMsg] = useState<string | null>(null);
+  const [sendErr, setSendErr] = useState<string | null>(null);
+
   const draftUrl = props.links?.styled_draft?.url || null;
   const finalUrl = props.links?.final?.url || null;
 
@@ -58,6 +61,8 @@ export default function InvoicePanel(props: {
     (async () => {
       try {
         setErr(null);
+        setSendMsg(null);
+        setSendErr(null);
 
         const data = await getFields(props.selectedId);
         const next = (data?.draft || data?.final || null) as InvoiceFields | null;
@@ -195,13 +200,14 @@ export default function InvoicePanel(props: {
 
     const to = (toInput || "").trim();
     if (!to) {
-      setErr("Missing To email");
+      setSendErr("Missing To email");
+      setSendMsg(null);
       return;
     }
 
     setSending(true);
-    setMsg(null);
-    setErr(null);
+    setSendMsg(null);
+    setSendErr(null);
 
     try {
       const cc = parseCc(ccInput);
@@ -214,11 +220,11 @@ export default function InvoicePanel(props: {
         subject: subjectInput.trim() || undefined,
       });
 
-      setMsg("Invoice email sent ✅");
+      setSendMsg("Invoice email sent ✅");
       setCcInput("");
       setBccInput("");
     } catch (e: any) {
-      setErr(friendlyErrorMessage(e));
+      setSendErr(friendlyErrorMessage(e));
     } finally {
       setSending(false);
     }
@@ -372,6 +378,9 @@ export default function InvoicePanel(props: {
                 {sending ? "Sending..." : "📧 Send Invoice"}
               </button>
             </div>
+
+            {sendMsg ? <div className="inlineSuccess">{sendMsg}</div> : null}
+            {sendErr ? <div className="inlineError">{sendErr}</div> : null}
           </div>
         </div>
       </div>

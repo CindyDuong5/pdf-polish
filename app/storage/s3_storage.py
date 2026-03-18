@@ -1,4 +1,5 @@
 # app/storage/s3_storage.py
+# app/storage/s3_storage.py
 from __future__ import annotations
 
 import os
@@ -15,7 +16,6 @@ def _utcnow() -> datetime:
 
 
 def _safe_filename(name: str) -> str:
-    # Keep it simple for Content-Disposition; browsers are picky.
     name = (name or "document.pdf").strip().replace("\n", " ").replace("\r", " ")
     if not name.lower().endswith(".pdf"):
         name += ".pdf"
@@ -35,7 +35,6 @@ class S3Storage:
 
         session = boto3.Session(profile_name=profile) if profile else boto3.Session()
 
-        # signature_version helps with some environments, safe default
         self.s3 = session.client(
             "s3",
             region_name=region,
@@ -57,10 +56,8 @@ class S3Storage:
             Body=data,
             ContentType=content_type or "application/octet-stream",
         )
+
     def copy_object(self, src_key: str, dst_key: str) -> None:
-        """
-        Server-side copy (no download/re-upload).
-        """
         self.s3.copy_object(
             Bucket=self.bucket,
             Key=dst_key,
@@ -68,10 +65,11 @@ class S3Storage:
             ContentType="application/pdf",
             MetadataDirective="REPLACE",
         )
+
     def download_bytes(self, key: str) -> bytes:
         resp = self.s3.get_object(Bucket=self.bucket, Key=key)
         return resp["Body"].read()
-    
+
     def presign_get_url(
         self,
         key: str,
@@ -79,15 +77,11 @@ class S3Storage:
         download_filename: str | None = None,
         inline: bool = True,
     ) -> str:
-        """
-        inline=True opens in browser tab; inline=False forces download.
-        """
         params = {"Bucket": self.bucket, "Key": key}
 
         if download_filename:
             fname = _safe_filename(download_filename)
             disp = "inline" if inline else "attachment"
-            # filename*= for utf-8 safety
             params["ResponseContentDisposition"] = f"{disp}; filename*=UTF-8''{quote(fname)}"
             params["ResponseContentType"] = "application/pdf"
 
@@ -97,8 +91,19 @@ class S3Storage:
             ExpiresIn=int(expires_seconds),
         )
 
+    def public_url(self, key: str) -> str:
+        base = os.getenv("CLOUDFRONT_BASE_URL", "").rstrip("/")
+        if not base:
+            raise RuntimeError("CLOUDFRONT_BASE_URL not set")
 
-# convenience functions (matches your api_main import style)
+        clean_key = (key or "").lstrip("/")
+        if not clean_key.startswith("final/"):
+            raise RuntimeError(f"CloudFront is only configured for final/ keys, got: {key}")
+
+        clean_key = clean_key[len("final/"):]
+        return f"{base}/{clean_key}"
+
+
 _storage_singleton: S3Storage | None = None
 
 
@@ -111,3 +116,7 @@ def get_storage() -> S3Storage:
 
 def presign_get_url(key: str, expires_seconds: int = 3600) -> str:
     return get_storage().presign_get_url(key=key, expires_seconds=expires_seconds)
+
+
+def public_url(key: str) -> str:
+    return get_storage().public_url(key)

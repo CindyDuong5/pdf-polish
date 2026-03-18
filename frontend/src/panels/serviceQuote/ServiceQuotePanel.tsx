@@ -26,6 +26,9 @@ export default function ServiceQuotePanel(props: {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  const [sendMsg, setSendMsg] = useState<string | null>(null);
+  const [sendErr, setSendErr] = useState<string | null>(null);
+
   const originalUrl = props.links?.original?.url || null;
   const draftUrl = props.links?.styled_draft?.url || null;
   const finalUrl = props.links?.final?.url || null;
@@ -53,7 +56,9 @@ export default function ServiceQuotePanel(props: {
     (async () => {
       try {
         setErr(null);
-
+        setSendMsg(null);
+        setSendErr(null);
+        
         const data = await getFields(props.selectedId);
         const resolvedDocId = data?.doc_id || props.selectedId;
 
@@ -128,9 +133,16 @@ export default function ServiceQuotePanel(props: {
 
   async function onSendEmail() {
     if (!props.selectedId) return;
+
+    if (!toEmail.trim()) {
+      setSendErr("Missing client email");
+      setSendMsg(null);
+      return;
+    }
+
     setSending(true);
-    setMsg(null);
-    setErr(null);
+    setSendMsg(null);
+    setSendErr(null);
 
     try {
       const cc = parseCc(ccInput);
@@ -152,11 +164,11 @@ export default function ServiceQuotePanel(props: {
         props.onLinksUpdated(l);
       }
 
-      setMsg("Email sent ✅");
+      setSendMsg("Email sent ✅");
       setCcInput("");
       setBccInput("");
     } catch (e: any) {
-      setErr(friendlyErrorMessage(e));
+      setSendErr(friendlyErrorMessage(e));
     } finally {
       setSending(false);
     }
@@ -263,6 +275,9 @@ export default function ServiceQuotePanel(props: {
                 {sending ? "Sending..." : "📧 Send"}
               </button>
             </div>
+
+            {sendMsg ? <div className="inlineSuccess">{sendMsg}</div> : null}
+            {sendErr ? <div className="inlineError">{sendErr}</div> : null}
           </div>
         </div>
       </div>

@@ -207,18 +207,11 @@ def list_document_history(
                 or row.get("job_report_number")
                 or row.get("id")
             )
-            safe_doc_type = (row.get("doc_type") or "DOCUMENT").replace(" ", "_")
-            filename = f"{safe_doc_type}_{label}.pdf"
 
             final_key = row.get("final_s3_key")
             final_url = None
             if final_key:
-                final_url = storage.presign_get_url(
-                    key=final_key,
-                    expires_seconds=3600,
-                    download_filename=filename,
-                    inline=True,
-                )
+                final_url = storage.public_url(final_key)
 
             items.append(
                 {
@@ -294,14 +287,17 @@ def presign_document(
         label = rowd["invoice_number"] or rowd["quote_number"] or rowd["job_report_number"] or doc_id
         filename = f"{rowd['doc_type']}_{label}.pdf"
 
-        url = storage.presign_get_url(
-            key=key,
-            expires_seconds=expires_seconds,
-            download_filename=filename,
-            inline=True,
-        )
-        return {"url": url, "key": key, "which": which}
+        if which == "final":
+            url = storage.public_url(key)
+        else:
+            url = storage.presign_get_url(
+                key=key,
+                expires_seconds=expires_seconds,
+                download_filename=filename,
+                inline=True,
+            )
 
+        return {"url": url, "key": key, "which": which}
 
 @app.get("/api/documents/{doc_id}/links")
 def get_document_links(doc_id: str, expires_seconds: int = 3600):
@@ -334,9 +330,13 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
         label = rowd["invoice_number"] or rowd["quote_number"] or rowd["job_report_number"] or rowd["id"]
         filename = f"{rowd['doc_type']}_{label}.pdf"
 
-        def url_for(key: str | None) -> str | None:
+        def url_for(key: str | None, which: str) -> str | None:
             if not key:
                 return None
+
+            if which == "final":
+                return storage.public_url(key)
+
             return storage.presign_get_url(
                 key=key,
                 expires_seconds=expires_seconds,
@@ -348,9 +348,18 @@ def get_document_links(doc_id: str, expires_seconds: int = 3600):
             "id": rowd["id"],
             "doc_type": rowd["doc_type"],
             "filename": filename,
-            "original": {"key": rowd["original_s3_key"], "url": url_for(rowd["original_s3_key"])},
-            "styled_draft": {"key": rowd["styled_draft_s3_key"], "url": url_for(rowd["styled_draft_s3_key"])},
-            "final": {"key": rowd["final_s3_key"], "url": url_for(rowd["final_s3_key"])},
+            "original": {
+                "key": rowd["original_s3_key"],
+                "url": url_for(rowd["original_s3_key"], "original"),
+            },
+            "styled_draft": {
+                "key": rowd["styled_draft_s3_key"],
+                "url": url_for(rowd["styled_draft_s3_key"], "styled_draft"),
+            },
+            "final": {
+                "key": rowd["final_s3_key"],
+                "url": url_for(rowd["final_s3_key"], "final"),
+            },
         }
 
 @app.post("/api/documents/{doc_id}/finalize")
@@ -802,20 +811,16 @@ def send_email_any(doc_id: str, body: SendEmailIn):
 
         storage = get_storage()
 
-        key = rowd["final_s3_key"] or rowd["styled_draft_s3_key"] or rowd["original_s3_key"]
-        if not key:
-            raise HTTPException(status_code=400, detail="No PDF available to send")
+        final_key = rowd.get("final_s3_key")
+        if not final_key:
+            raise HTTPException(status_code=400, detail="No final PDF available to send")
 
         label = rowd["invoice_number"] or rowd["quote_number"] or rowd["job_report_number"] or rowd["id"]
         filename = f"{rowd['doc_type']}_{label}.pdf"
 
-        file_url = storage.presign_get_url(
-            key=key,
-            expires_seconds=7 * 24 * 3600,
-            download_filename=filename,
-            inline=True,
-        )
-        pdf_bytes = storage.download_bytes(key)
+        file_url = storage.public_url(final_key)
+        pdf_bytes = storage.download_bytes(final_key)
+                
 
         additional_docs = list_additional_documents(db, real_doc_id)
         additional_attachments = build_additional_email_attachments(db, storage, real_doc_id)
