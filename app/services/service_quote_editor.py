@@ -24,6 +24,20 @@ def _money_str(x: Any) -> str:
     return str(x).strip()
 
 
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    out: list[str] = []
+    for x in value:
+        text = str(x or "").replace("\r\n", "\n").replace("\r", "\n")
+        for line in text.split("\n"):
+            s = line.strip()
+            if s:
+                out.append(s)
+
+    return out
+
 def service_quote_to_json(doc: ServiceQuoteData) -> dict:
     return {
         "client_name": doc.client_name or "",
@@ -36,6 +50,7 @@ def service_quote_to_json(doc: ServiceQuoteData) -> dict:
         "quote_number": doc.quote_number or "",
         "quote_date": doc.quote_date or "",
         "quote_description": doc.quote_description or "",
+        "specific_exclusions": _normalize_string_list(doc.specific_exclusions),
         "items": [
             {"name": it.name or "", "price": _money_str(it.price), "description": it.description or ""}
             for it in (doc.items or [])
@@ -50,6 +65,7 @@ def normalize_service_quote_fields(fields: dict) -> dict:
     """
     Always compute subtotal/tax/total from item prices.
     (Frontend also computes, but backend enforces consistency.)
+    Also normalize specific_exclusions into a clean string list.
     """
     items = fields.get("items") or []
     subtotal = Decimal("0.00")
@@ -62,8 +78,10 @@ def normalize_service_quote_fields(fields: dict) -> dict:
     fields["subtotal"] = str(subtotal)
     fields["tax"] = str(tax)
     fields["total"] = str(total)
+    fields["specific_exclusions"] = _normalize_string_list(fields.get("specific_exclusions"))
 
     return fields
+
 
 def json_to_service_quote(j: dict) -> ServiceQuoteData:
     def dec_or_none(s: str | None) -> Decimal | None:
@@ -95,6 +113,7 @@ def json_to_service_quote(j: dict) -> ServiceQuoteData:
         quote_number=j.get("quote_number", "") or "",
         quote_date=j.get("quote_date", "") or "",
         quote_description=j.get("quote_description", "") or "",
+        specific_exclusions=_normalize_string_list(j.get("specific_exclusions")),
         items=items,
         subtotal=j.get("subtotal", "") or "",
         tax=j.get("tax", "") or "",

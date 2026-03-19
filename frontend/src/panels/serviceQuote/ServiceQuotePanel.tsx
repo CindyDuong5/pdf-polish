@@ -29,9 +29,14 @@ export default function ServiceQuotePanel(props: {
   const [sendMsg, setSendMsg] = useState<string | null>(null);
   const [sendErr, setSendErr] = useState<string | null>(null);
 
+  const [finalRefreshKey, setFinalRefreshKey] = useState(0);
+
   const originalUrl = props.links?.original?.url || null;
   const draftUrl = props.links?.styled_draft?.url || null;
-  const finalUrl = props.links?.final?.url || null;
+  const rawFinalUrl = props.links?.final?.url || null;
+  const finalUrl = rawFinalUrl
+    ? `${rawFinalUrl}${rawFinalUrl.includes("?") ? "&" : "?"}r=${finalRefreshKey}`
+    : null;
 
   const toEmail = (fields?.client_email || props.selected?.customer_email || "").trim();
 
@@ -124,6 +129,7 @@ export default function ServiceQuotePanel(props: {
 
       const l = await getLinks(resolvedDocId);
       props.onLinksUpdated(l);
+      setFinalRefreshKey((n) => n + 1);
 
       setMsg(result?.reused_existing ? "Saved Final ✅ merged into latest quote row" : "Saved Final ✅");
     } catch (e: any) {
@@ -211,7 +217,11 @@ export default function ServiceQuotePanel(props: {
         </div>
 
         <div className="card">
-          <PreviewCard title="Final" url={finalUrl} reloadKey={props.reloadKey} />
+          <PreviewCard
+            title="Final"
+            url={finalUrl}
+            reloadKey={props.reloadKey + finalRefreshKey}
+          />
 
           <div style={{ padding: 12, borderTop: "1px solid #eee" }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Send Email</div>

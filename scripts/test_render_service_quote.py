@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Optional
+from copy import deepcopy
 
 from pypdf import PdfReader
 
@@ -22,19 +23,26 @@ def _guess_template_path() -> Path:
 
 
 def _guess_original_path() -> Path:
-    p1 = Path("sample_inputs/Quote_1017_Cindy_Annual_Inspection.pdf")
-    if p1.exists():
-        return p1
+    preferred = [
+        Path("sample_inputs/SERVICE_QUOTE_1036.pdf"),
+        Path("sample_inputs/Quote_1017_Cindy_Annual_Inspection.pdf"),
+    ]
+    for p in preferred:
+        if p.exists():
+            return p
 
     folder = Path("sample_inputs")
     if folder.exists():
+        for p in folder.glob("*.pdf"):
+            if "SERVICE_QUOTE_1036" in p.name:
+                return p
         for p in folder.glob("*.pdf"):
             if "Quote_1015" in p.name:
                 return p
         for p in folder.glob("*.pdf"):
             return p
 
-    return p1
+    return preferred[0]
 
 
 def _norm(v) -> str:
@@ -154,26 +162,7 @@ def _force_multiline_quote_description() -> str:
     )
 
 
-def main() -> None:
-    template_path = _guess_template_path()
-    original_path = _guess_original_path()
-
-    if not template_path.exists():
-        raise FileNotFoundError(f"Template not found: {template_path.resolve()}")
-    if not original_path.exists():
-        raise FileNotFoundError(f"Original PDF not found: {original_path.resolve()}")
-
-    print("Template :", template_path.resolve())
-    print("Original :", original_path.resolve())
-
-    original_bytes = original_path.read_bytes()
-
-    styler = ServiceQuoteStyler(template_pdf=template_path)
-
-    # Parse using your existing parser
-    _out_bytes_unused, data = styler.style(original_bytes)
-
-    # Patch missing basic fields
+def _patch_basic_fields(data) -> None:
     if not (data.client_name or "").strip():
         data.client_name = "Client Name"
 
@@ -195,23 +184,30 @@ def main() -> None:
     if not (data.property_address or "").strip():
         data.property_address = "456 Sample Avenue, Toronto, ON M2M 2M2"
 
-    # Force a multi-line quote description for visual testing
-    data.quote_description = _force_multiline_quote_description()
-
-    # Optional: ensure quote/date visible for testing
     if not (data.quote_number or "").strip():
         data.quote_number = "SQ-TEST-1001"
 
     if not (data.quote_date or "").strip():
         data.quote_date = "Mar 09, 2026"
 
-    out_bytes = render_service_quote(template_path, data)
 
-    out_path = Path("tmp/service_quote_draft_multiline_desc.pdf")
+def _print_exclusions(title: str, exclusions: list[str]) -> None:
+    print(f"\n--- {title} ---")
+    print("count:", len(exclusions))
+    if not exclusions:
+        print("(none)")
+        return
+
+    for i, ex in enumerate(exclusions, start=1):
+        print(f"  {i}. {ex}")
+
+
+def _render_case(template_path: Path, data, out_path: Path, label: str) -> None:
+    out_bytes = render_service_quote(template_path, data)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(out_bytes)
 
-    print("\n✅ Draft created:", out_path.resolve())
+    print(f"\n✅ {label} created: {out_path.resolve()}")
 
     print("\n--- Extracted + patched data (used for render) ---")
     print("client_name      :", data.client_name)
@@ -225,14 +221,86 @@ def main() -> None:
     print("quote_date       :", data.quote_date)
 
     print("quote_description:")
-    for i, ln in enumerate(data.quote_description.split("\n"), start=1):
+    for i, ln in enumerate((data.quote_description or "").split("\n"), start=1):
         print(f"  line {i}: {ln}")
 
     print("subtotal         :", data.subtotal)
     print("tax              :", data.tax)
     print("total            :", data.total)
 
+    _print_exclusions("specific_exclusions passed into renderer", data.specific_exclusions or [])
+
     _print_fields_from_annots(out_path)
+
+
+def main() -> None:
+    template_path = _guess_template_path()
+    original_path = _guess_original_path()
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path.resolve()}")
+    if not original_path.exists():
+        raise FileNotFoundError(f"Original PDF not found: {original_path.resolve()}")
+
+    print("Template :", template_path.resolve())
+    print("Original :", original_path.resolve())
+
+    original_bytes = original_path.read_bytes()
+
+    styler = ServiceQuoteStyler(template_pdf=template_path)
+
+    # Parse using your existing parser
+    _out_bytes_unused, parsed_data = styler.style(original_bytes)
+
+    print("\n===== PARSED DATA CHECK =====")
+    print("quote_number     :", parsed_data.quote_number)
+    print("quote_date       :", parsed_data.quote_date)
+    print("company_name     :", parsed_data.company_name)
+    print("property_name    :", parsed_data.property_name)
+    print("subtotal         :", parsed_data.subtotal)
+    print("tax              :", parsed_data.tax)
+    print("total            :", parsed_data.total)
+
+    _print_exclusions("parsed specific_exclusions", parsed_data.specific_exclusions or [])
+
+    # ----------------------------
+    # CASE 1: Render with parsed exclusions
+    # ----------------------------
+    data_parsed = deepcopy(parsed_data)
+    _patch_basic_fields(data_parsed)
+    data_parsed.quote_description = _force_multiline_quote_description()
+
+    out_path_1 = Path("tmp/service_quote_draft_with_parsed_exclusions.pdf")
+    _render_case(
+        template_path=template_path,
+        data=data_parsed,
+        out_path=out_path_1,
+        label="Draft with parsed exclusions",
+    )
+
+    # ----------------------------
+    # CASE 2: Render with fallback exclusions
+    # ----------------------------
+    data_fallback = deepcopy(parsed_data)
+    _patch_basic_fields(data_fallback)
+    data_fallback.quote_description = _force_multiline_quote_description()
+    data_fallback.specific_exclusions = []
+
+    out_path_2 = Path("tmp/service_quote_draft_with_fallback_exclusions.pdf")
+    _render_case(
+        template_path=template_path,
+        data=data_fallback,
+        out_path=out_path_2,
+        label="Draft with fallback exclusions",
+    )
+
+    print("\n===== DONE =====")
+    print("Check these files visually:")
+    print("  1.", out_path_1.resolve())
+    print("  2.", out_path_2.resolve())
+    print("\nExpected result:")
+    print("  - file 1 should show parsed exclusions from the source PDF")
+    print("  - file 2 should show the 2 hardcoded fallback exclusions")
 
 
 if __name__ == "__main__":

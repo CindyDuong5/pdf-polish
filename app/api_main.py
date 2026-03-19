@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, List, Optional
 
@@ -402,7 +403,9 @@ def finalize_document(
             raise HTTPException(status_code=400, detail="Document missing original_s3_key")
 
         source_key = draft_key or original_key
-        final_key_path = final_key_for(original_key, doc_id)
+        version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        versioned_doc_id = f"{doc_id}-{version}"
+        final_key_path = final_key_for(original_key, versioned_doc_id, rowd["doc_type"])
 
         db.execute(
             text(
@@ -652,7 +655,10 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
             final_bytes = render_service_quote(template_path, data)
 
-            fk = final_key_for(original_key, target_doc_id, doc_type=doc_type)
+            version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+            versioned_doc_id = f"{target_doc_id}-{version}"
+
+            fk = final_key_for(original_key, versioned_doc_id, doc_type=doc_type)
             storage.upload_pdf_bytes(fk, final_bytes)
 
             db.execute(

@@ -79,6 +79,7 @@ export default function ServiceQuoteEditor({
   }
 
   const items = Array.isArray(v.items) ? v.items : [];
+  const exclusions = Array.isArray(v.specific_exclusions) ? v.specific_exclusions : [];
 
   return (
     <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginTop: 14 }}>
@@ -128,7 +129,7 @@ export default function ServiceQuoteEditor({
         rows={5}
       />
 
-      <div style={{ marginTop: 10, fontWeight: 800 }}>Items</div>
+      <div style={{ marginTop: 14, fontWeight: 800 }}>Items</div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
         {items.map((it: any, idx: number) => (
@@ -191,9 +192,7 @@ export default function ServiceQuoteEditor({
         ))}
 
         <button
-          onClick={() =>
-            set("items", [...items, { name: "", price: "", description: "" }])
-          }
+          onClick={() => set("items", [...items, { name: "", price: "", description: "" }])}
           style={{
             padding: "10px 12px",
             borderRadius: 10,
@@ -207,6 +206,68 @@ export default function ServiceQuoteEditor({
         </button>
       </div>
 
+      <div style={{ marginTop: 16, fontWeight: 800 }}>Specific Exclusions</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+        {exclusions.map((ex: string, idx: number) => (
+          <div
+            key={idx}
+            style={{
+              border: "1px solid #eee",
+              borderRadius: 10,
+              padding: 10,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <TextArea
+              label={`Exclusion ${idx + 1}`}
+              value={ex}
+              onChange={(x) => {
+                const next = [...exclusions];
+                next[idx] = x;
+                set("specific_exclusions", next);
+              }}
+              rows={2}
+            />
+
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => {
+                  const next = [...exclusions];
+                  next.splice(idx, 1);
+                  set("specific_exclusions", next);
+                }}
+                style={{
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Remove Exclusion
+              </button>
+            </div>
+          </div>
+        ))}
+
+        <button
+          onClick={() => set("specific_exclusions", [...exclusions, ""])}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid #ddd",
+            background: "white",
+            cursor: "pointer",
+            alignSelf: "flex-start",
+          }}
+        >
+          + Add Exclusion
+        </button>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
         <Field label="Subtotal" value={v.subtotal} readOnly />
         <Field label="Tax" value={v.tax} readOnly />
@@ -214,7 +275,7 @@ export default function ServiceQuoteEditor({
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-        Totals are auto-calculated from item prices (HST included).
+        Totals are auto-calculated from item prices.
       </div>
 
       {onSave ? (

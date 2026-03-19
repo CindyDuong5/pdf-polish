@@ -17,7 +17,7 @@ def _json_default(o):
 
 
 def main() -> None:
-    pdf_path = Path("sample_inputs/Quote_1017_Cindy_Annual_Inspection.pdf")
+    pdf_path = Path("sample_inputs/SERVICE_QUOTE_1036.pdf")
     pdf_bytes = pdf_path.read_bytes()
 
     data = parse_service_quote(pdf_bytes)
@@ -44,6 +44,16 @@ def main() -> None:
     print("items_count:", len(payload.get("items") or []))
     if payload.get("items"):
         print("first_item:", payload["items"][0])
+
+    exclusions = payload.get("specific_exclusions") or []
+    print("specific_exclusions_count:", len(exclusions))
+
+    print("\n===== SPECIFIC EXCLUSIONS =====")
+    if exclusions:
+        for i, ex in enumerate(exclusions, start=1):
+            print(f"{i}. {ex}")
+    else:
+        print("(none)")
 
 
 if __name__ == "__main__":

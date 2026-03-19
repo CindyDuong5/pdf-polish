@@ -48,6 +48,12 @@ export type ServiceQuoteLine = {
   amount?: string | number;
 };
 
+export type ServiceQuoteItem = {
+  name?: string;
+  price?: string | number;
+  description?: string;
+};
+
 export type ServiceQuoteFields = {
   quote_number?: string;
   quote_date?: string;
@@ -57,20 +63,25 @@ export type ServiceQuoteFields = {
   client_email?: string;
   client_phone?: string;
 
+  company_name?: string;
+  company_address?: string;
+
   property_name?: string;
   property_address?: string;
-  company_name?: string;
 
-  scope_of_work?: string;
-  exclusions?: string;
+  quote_description?: string;
+
+  specific_exclusions?: string[];
+
   notes?: string;
 
   subtotal?: string | number;
   tax_rate?: string | number;
+  tax?: string | number;
   tax_amount?: string | number;
   total?: string | number;
 
-  line_items?: ServiceQuoteLine[];
+  items?: ServiceQuoteItem[];
 
   [key: string]: any;
 };

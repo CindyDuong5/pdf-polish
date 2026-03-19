@@ -635,22 +635,40 @@ def _draw_totals_v2(
 # Included / exclusions section
 # =========================
 
-def _included_exclusions_lines(font_regular: str, ps: PageSpec) -> Tuple[str, str, List[str], float]:
+def _resolved_exclusions(data: ServiceQuoteData) -> List[str]:
+    parsed = [(_clean(x)) for x in (data.specific_exclusions or []) if _clean(x)]
+    if parsed:
+        return parsed
+
+    return [
+        "Job to be completed during regular hours 08:00-16:30 Monday to Friday",
+        "Pricing is subject to parts availability and all items being done concurrently",
+    ]
+
+
+def _included_exclusions_lines(
+    data: ServiceQuoteData,
+    font_regular: str,
+    ps: PageSpec,
+) -> Tuple[str, str, List[str], float]:
     x0 = _x0()
     x1 = _x1(ps)
     text_x = x0 + 16
     max_w = (x1 - text_x) - 10
+
     heading1 = "Included in Quote"
     included_line = "All Parts & Labor"
-    exclusions = [
-        "Job to be completed during regular hours 08:00-16:30 Monday to Friday",
-        "Pricing is subject to parts availability and all items being done concurrently",
-    ]
+    exclusions = _resolved_exclusions(data)
+
     return heading1, included_line, exclusions, max_w
 
 
-def _estimate_included_exclusions_height(ps: PageSpec, font_regular: str) -> float:
-    _, _, exclusions, max_w = _included_exclusions_lines(font_regular, ps)
+def _estimate_included_exclusions_height(
+    ps: PageSpec,
+    font_regular: str,
+    data: ServiceQuoteData,
+) -> float:
+    _, _, exclusions, max_w = _included_exclusions_lines(data, font_regular, ps)
 
     h = 0.0
     h += P2_LINE_H
@@ -670,6 +688,7 @@ def _draw_included_exclusions_section_v2(
     ps: PageSpec,
     y_top: float,
     font_regular: str,
+    data: ServiceQuoteData,
 ) -> float:
     x0 = _x0()
     x1 = _x1(ps)
@@ -696,10 +715,7 @@ def _draw_included_exclusions_section_v2(
     c.drawString(x0, y, "Specific Exclusions")
     y -= P2_LINE_H
 
-    exclusions = [
-        "Job to be completed during regular hours 08:00-16:30 Monday to Friday",
-        "Pricing is subject to parts availability and all items being done concurrently",
-    ]
+    exclusions = _resolved_exclusions(data)
 
     c.setFont(font_regular, P2_TEXT_FS)
     for ex in exclusions:
@@ -846,8 +862,10 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
         if (y_est - TOTALS_HEIGHT_EST) < CONTENT_BOTTOM:
             totals_need_own_page = True
+    else:
+        y_est = first_items_y
 
-    included_h_est = _estimate_included_exclusions_height(ps, font_regular)
+    included_h_est = _estimate_included_exclusions_height(ps, font_regular, data)
 
     # --- Pre-check: does Included/Exclusions fit right after totals on the same page? ---
     included_need_own_page = False
@@ -908,13 +926,19 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
                 cur_y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
                 cur_y = cur_y - CONTINUED_TOP_GAP
                 totals_need_own_page = True
-                included_need_own_page = included_need_own_page or True
+                included_need_own_page = True
 
             cur_y = _draw_totals_v2(c, ps, y_top=cur_y, data=data, font_regular=font_regular, font_bold=font_bold)
 
             y_section_top = cur_y - P2_TOP_BLANK
             if not included_need_own_page and (y_section_top - included_h_est) >= CONTENT_BOTTOM:
-                _draw_included_exclusions_section_v2(c, ps, y_top=y_section_top, font_regular=font_regular)
+                _draw_included_exclusions_section_v2(
+                    c,
+                    ps,
+                    y_top=y_section_top,
+                    font_regular=font_regular,
+                    data=data,
+                )
 
         _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
         c.showPage()
@@ -928,7 +952,13 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
         y_section_top = totals_page_cursor_after - P2_TOP_BLANK
         if not included_need_own_page and (y_section_top - included_h_est) >= CONTENT_BOTTOM:
-            _draw_included_exclusions_section_v2(c, ps, y_top=y_section_top, font_regular=font_regular)
+            _draw_included_exclusions_section_v2(
+                c,
+                ps,
+                y_top=y_section_top,
+                font_regular=font_regular,
+                data=data,
+            )
 
         _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
         c.showPage()
@@ -939,7 +969,13 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
         y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
         y = y - CONTINUED_TOP_GAP
         y2 = y - P2_TOP_BLANK
-        _draw_included_exclusions_section_v2(c, ps, y_top=y2, font_regular=font_regular)
+        _draw_included_exclusions_section_v2(
+            c,
+            ps,
+            y_top=y2,
+            font_regular=font_regular,
+            data=data,
+        )
 
         _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
         c.showPage()

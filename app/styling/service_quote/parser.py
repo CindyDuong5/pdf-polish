@@ -1,4 +1,5 @@
 # app/styling/service_quote/parser.py
+# app/styling/service_quote/parser.py
 from __future__ import annotations
 
 import re
@@ -33,6 +34,9 @@ class ServiceQuoteData:
     quote_description: str = ""
 
     items: List[SQLine] = field(default_factory=list)
+
+    # NEW
+    specific_exclusions: List[str] = field(default_factory=list)
 
     subtotal: str = ""
     tax: str = ""
@@ -94,26 +98,12 @@ def _find_first(words, predicate):
 
 
 def _extract_address_by_columns(words, which: str) -> str:
-    """
-    Extract address from word tokens using a simple column split (x threshold).
-    Adds a safety-net:
-      - if the address line ends with a 3-char prefix like "M4K"
-      - and the next line contains a postal-tail like "1P3"
-      - append the postal tail.
-    Ignores next-line junk (labels, long sentences, etc.).
-
-    ✅ IMPORTANT FIX:
-    The column boundary must be far enough right so company address tokens like "ON" (x≈256)
-    remain in the left column. For this PDF, right-column labels start around x≈310,
-    so we use x_threshold=300.
-    """
-    x_threshold = 300.0  # ✅ was too low at 250; that mis-classified "ON" + "M4K" into the right column
+    x_threshold = 300.0
     want_right = (which == "property")
 
     def in_col(w) -> bool:
         return (w.x0 >= x_threshold) if want_right else (w.x0 < x_threshold)
 
-    # Find the Address: label for the target column
     label = _find_first(words, lambda w: w.text.strip().lower() == "address:" and in_col(w))
     if not label:
         return ""
@@ -121,7 +111,6 @@ def _extract_address_by_columns(words, which: str) -> str:
     page = label.page
     y0 = label.y0
 
-    # Same-line content to the right of "Address:"
     same_line = [
         w for w in words
         if w.page == page and in_col(w) and abs(w.y0 - y0) < 1.5 and w.x0 > label.x1
@@ -132,7 +121,6 @@ def _extract_address_by_columns(words, which: str) -> str:
     if not line_text:
         return ""
 
-    # Determine the next line y in this column
     col_words_after = [w for w in words if w.page == page and in_col(w) and w.y0 > y0 + 3]
     if not col_words_after:
         return line_text
@@ -141,14 +129,11 @@ def _extract_address_by_columns(words, which: str) -> str:
     next_line = [w for w in words if w.page == page and in_col(w) and abs(w.y0 - next_y) < 1.5]
     next_line = sorted(next_line, key=lambda w: w.x0)
 
-    # --- Safety-net cleanup ---
     next_line_text = _join_tokens([w.text for w in next_line])
 
-    # 1) Ignore next line if it starts with a label (Address:, Property:, etc.)
     if next_line_text and LABEL_RE.match(next_line_text):
         return line_text
 
-    # 2) Only consider postal-ish tokens on next line (e.g., "1P3" or "M4K1P3")
     postal_parts = [w.text for w in next_line if _is_postal_token(w.text)]
     if not postal_parts:
         return line_text
@@ -157,15 +142,56 @@ def _extract_address_by_columns(words, which: str) -> str:
     if not postal_joined:
         return line_text
 
-    # 3) Append only if line ends with 3-char prefix like "M4K" and tail isn't already included
     if re.search(r"\b[A-Z]\d[A-Z]$", line_text.upper()) and postal_joined.upper() not in line_text.upper():
         return _clean(f"{line_text} {postal_joined}")
 
-    # If we already have a full postal code somewhere, don't append anything
     if re.search(r"\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b", line_text.upper()):
         return line_text
 
     return line_text
+
+
+def _extract_specific_exclusions(text: str) -> List[str]:
+    """
+    Extract bullet points under SPECIFIC EXCLUSIONS.
+    Accepts either:
+      - bullet dot: • text
+      - dash bullet: - text
+    Stops before:
+      - This proposal is based on...
+      - Total Proposal...
+      - Sincerely
+      - Acceptance of Proposal
+    """
+    m = re.search(
+        r"SPECIFIC EXCLUSIONS\s*(?P<body>.*?)"
+        r"(?=\bThis proposal is based on\b|\bTotal Proposal\b|\bSincerely\b|\bACCEPTANCE OF PROPOSAL\b|$)",
+        text,
+        flags=re.I | re.S,
+    )
+    if not m:
+        return []
+
+    body = _clean(m.group("body"))
+    if not body:
+        return []
+
+    lines = [_clean(x) for x in body.splitlines() if _clean(x)]
+
+    out: List[str] = []
+    for line in lines:
+        # remove bullet markers like • or -
+        cleaned = re.sub(r"^[•\-\u2022]+\s*", "", line).strip()
+        if not cleaned:
+            continue
+
+        # extra safety: skip the sentence you do NOT want
+        if re.search(r"^This proposal is based on\b", cleaned, flags=re.I):
+            continue
+
+        out.append(cleaned)
+
+    return out
 
 
 def parse_service_quote(pdf_bytes: bytes) -> ServiceQuoteData:
@@ -188,8 +214,7 @@ def parse_service_quote(pdf_bytes: bytes) -> ServiceQuoteData:
     if m:
         data.quote_number = _clean(m.group(1))
 
-    # Company/Property names:
-    # "Company: <company> Property: <property>"
+    # Company/Property names
     m = re.search(r"Company\s*:\s*(?P<company>.*?)\s+Property\s*:\s*(?P<prop>[^\n]+)", text, flags=re.I)
     if m:
         data.company_name = _clean(m.group("company"))
@@ -198,11 +223,10 @@ def parse_service_quote(pdf_bytes: bytes) -> ServiceQuoteData:
         data.company_name = _after_same_line(text, "Company:")
         data.property_name = _after_same_line(text, "Property:")
 
-    # ✅ Addresses from word tokens (column-aware) + safety-net postal append
     data.company_address = _extract_address_by_columns(words, "company")
     data.property_address = _extract_address_by_columns(words, "property")
 
-    # Scope of work (keep blank if empty)
+    # Scope of work
     m = re.search(r"SCOPE OF WORK\s*(?P<scope>.*?)\bSPECIFIC INCLUSIONS\b", text, flags=re.I | re.S)
     if m:
         scope = _clean(m.group("scope"))
@@ -245,12 +269,15 @@ def parse_service_quote(pdf_bytes: bytes) -> ServiceQuoteData:
         current.description = current.description.strip()
         data.items.append(current)
 
-    # Total (from "Total Proposal ... $6,843.37")
+    # NEW: specific exclusions
+    data.specific_exclusions = _extract_specific_exclusions(text)
+
+    # Total
     m = re.search(r"Total Proposal.*?\$\s*(?P<amt>[0-9,]+\.[0-9]{2})", text, flags=re.I)
     if m:
         data.total = str(_money_decimal(m.group("amt")))
 
-    # Compute subtotal/tax/total from items (13% HST)
+    # Compute subtotal/tax/total from items
     if data.items:
         subtotal = sum((x.price or Decimal("0.00")) for x in data.items)
         tax = (subtotal * Decimal("0.13")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
