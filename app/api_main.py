@@ -715,8 +715,8 @@ class AddAdditionalDocumentByUrlIn(BaseModel):
     display_name: str
 
 def _is_reviewable_quote(doc_type: str) -> bool:
-    dt = (doc_type or "").upper()
-    return ("SERVICE_QUOTE" in dt) or ("PROJECT_QUOTE" in dt)
+    dt = (doc_type or "").upper().replace(" ", "_")
+    return ("SERVICE_QUOTE" in dt) or ("PROJECT_QUOTE" in dt) or ("QUOTE" in dt)
 
 
 def _extract_quote_info(row: dict) -> tuple[str | None, str | None, str | None]:
@@ -963,7 +963,13 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "EMAIL_REPLY_TO",
                 "support@mainlinefire.com",
             )
-
+        print("DEBUG SEND", {
+            "doc_id": real_doc_id,
+            "doc_type": doc_type,
+            "reviewable": reviewable,
+            "email_from": email_from,
+            "email_reply_to": email_reply_to,
+        })
         send_email_brevo_smtp(
             to_email=to_email,
             subject=subject,
