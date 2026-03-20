@@ -945,6 +945,25 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         cc_list = [str(x) for x in (body.cc or [])]
         bcc_list = [str(x) for x in (body.bcc or [])]
 
+        if reviewable:
+            email_from = os.getenv(
+                "QUOTE_EMAIL_FROM",
+                "Mainline Fire Protection Sales <sales@mainlinefire.com>",
+            )
+            email_reply_to = os.getenv(
+                "QUOTE_EMAIL_REPLY_TO",
+                "sales@mainlinefire.com",
+            )
+        else:
+            email_from = os.getenv(
+                "EMAIL_FROM",
+                "Mainline Fire Protection <support@mainlinefire.com>",
+            )
+            email_reply_to = os.getenv(
+                "EMAIL_REPLY_TO",
+                "support@mainlinefire.com",
+            )
+
         send_email_brevo_smtp(
             to_email=to_email,
             subject=subject,
@@ -960,6 +979,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 ),
                 *additional_attachments,
             ],
+            from_value=email_from,
+            reply_to=email_reply_to,
         )
 
         sent_cc = ", ".join(cc_list) if cc_list else None

@@ -510,6 +510,14 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 ),
                 *additional_attachments,
             ),
+            from_value=os.getenv(
+                "EMAIL_FROM",
+                "Mainline Fire Protection <support@mainlinefire.com>",
+            ),
+            reply_to=os.getenv(
+                "EMAIL_REPLY_TO",
+                "support@mainlinefire.com",
+            ),
         )
         sent_cc = ", ".join(cc) if cc else None
         sent_bcc = ", ".join(bcc) if bcc else None
