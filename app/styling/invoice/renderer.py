@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 from typing import Any, Dict, List, Tuple
 
 from reportlab.lib.pagesizes import letter
@@ -17,9 +18,15 @@ from pypdf._page import PageObject
 
 from pathlib import Path
 import logging
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOGO = Path(__file__).resolve().parents[3] / "templates" / "email-assets" / "Mainline-Primary-Logo-Black.png"
+DEFAULT_LOGO = (
+    Path(__file__).resolve().parents[3]
+    / "templates"
+    / "email-assets"
+    / "Mainline-Primary-Logo-Black.png"
+)
 
 PAGE_W, PAGE_H = letter
 
@@ -125,21 +132,105 @@ def _draw_center(
     c.setFillColor(BLACK)
 
 
+def _tokenize_for_wrap(text: str) -> List[str]:
+    """
+    Split text into tokens while preserving common separators so long values like:
+    - emails
+    - item codes
+    - WO numbers
+    - slash-separated references
+    can wrap naturally.
+
+    Example:
+      abc-def/test@example.com
+    becomes tokens that can break at -, /, @, ., _
+    """
+    if not text:
+        return []
+
+    raw_parts = re.split(r"(\s+)", text)
+    tokens: List[str] = []
+
+    for part in raw_parts:
+        if not part:
+            continue
+
+        if part.isspace():
+            tokens.append(part)
+            continue
+
+        subparts = re.split(r"([/@._\-])", part)
+        for sp in subparts:
+            if sp:
+                tokens.append(sp)
+
+    return tokens
+
+
 def _wrap_lines(text: str, font: str, fs: int, max_w: float) -> List[str]:
-    words = (text or "").split()
-    if not words:
+    """
+    Wrap text safely, including long tokens with no spaces.
+    Falls back to character-level wrapping when a single token is still too wide.
+    """
+    text = (text or "").strip()
+    if not text:
         return [""]
+
+    tokens = _tokenize_for_wrap(text)
+    if not tokens:
+        return [""]
+
     lines: List[str] = []
-    cur = words[0]
-    for w in words[1:]:
-        trial = cur + " " + w
+    cur = ""
+
+    def flush():
+        nonlocal cur
+        if cur:
+            lines.append(cur.strip())
+            cur = ""
+
+    for tok in tokens:
+        trial = (cur + tok) if cur else tok
+
         if stringWidth(trial, font, fs) <= max_w:
             cur = trial
+            continue
+
+        if cur:
+            flush()
+
+        # token itself too wide -> hard-wrap character by character
+        if stringWidth(tok, font, fs) > max_w:
+            piece = ""
+            for ch in tok:
+                trial_piece = piece + ch
+                if piece and stringWidth(trial_piece, font, fs) > max_w:
+                    lines.append(piece)
+                    piece = ch
+                else:
+                    piece = trial_piece
+            cur = piece
         else:
-            lines.append(cur)
-            cur = w
-    lines.append(cur)
-    return lines
+            cur = tok
+
+    flush()
+    return lines or [""]
+
+
+def _wrap_paragraph_lines(text: str, fs: int, max_w: float, bold: bool = False) -> List[str]:
+    font = "Helvetica-Bold" if bold else "Helvetica"
+    out: List[str] = []
+    for para in (text or "").split("\n"):
+        para = para.strip()
+        if not para:
+            out.append("")
+            continue
+        out.extend(_wrap_lines(para, font, fs, max_w))
+    return out
+
+
+def _wrap_text_to_width(text: str, fs: int, max_w: float, bold: bool = False) -> List[str]:
+    return _wrap_paragraph_lines(text or "", fs=fs, max_w=max_w, bold=bold)
 
 
 def _hr(c: canvas.Canvas, x0: float, x1: float, y: float, lw: float = 1, col=BLACK):
@@ -159,8 +250,8 @@ def _vcenter_baseline(row_top: float, row_h: float, font_size: float) -> float:
     return row_top - (row_h / 2.0) - (font_size * 0.35)
 
 
-def _compute_row_h(desc_line_count: int) -> float:
-    core = max(1, desc_line_count) * ROW_LINE_H
+def _compute_row_h(line_count: int) -> float:
+    core = max(1, line_count) * ROW_LINE_H
     return max(ROW_LINE_H + ROW_PAD_Y, core + ROW_PAD_Y)
 
 
@@ -173,6 +264,112 @@ def _normalize_property_address(lines: List[str]) -> List[str]:
         if not last.upper().endswith(" CA"):
             cleaned[-1] = f"{last} CA"
     return cleaned
+
+
+def _draw_multiline_block(
+    c: canvas.Canvas,
+    x: float,
+    y_top: float,
+    lines: List[str],
+    fs: int = FS_XS,
+    bold_first: bool = False,
+    line_gap: float = 11,
+    color=BLACK,
+) -> float:
+    y = y_top
+    for i, line in enumerate(lines):
+        is_bold = bold_first and i == 0
+        _draw_text(c, x, y, line, fs=fs, bold=is_bold, color=color)
+        y -= line_gap
+    return y
+
+
+def _draw_text_inline_segments(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    segments: List[Tuple[str, bool]],
+    fs: int = FS_XS,
+    color=BLACK,
+):
+    cur_x = x
+    for text, bold in segments:
+        _set_font(c, fs, bold)
+        c.setFillColor(color)
+        c.drawString(cur_x, y, text)
+        cur_x += stringWidth(text, c._fontname, fs)
+    c.setFillColor(BLACK)
+
+
+def _draw_wrapped_cell_left(
+    c: canvas.Canvas,
+    x_left: float,
+    row_top: float,
+    row_h: float,
+    lines: List[str],
+    fs: int = FS_XS,
+):
+    base = _vcenter_baseline(row_top, row_h, fs)
+    n = max(1, len(lines))
+    start_y = base + ((n - 1) * ROW_LINE_H) / 2.0
+    yy = start_y
+    for ln in (lines or [""]):
+        _draw_text(c, x_left + 4, yy, ln, fs=fs)
+        yy -= ROW_LINE_H
+
+
+def _draw_wrapped_cell_top(
+    c: canvas.Canvas,
+    x_left: float,
+    row_top: float,
+    lines: List[str],
+    fs: int = FS_XS,
+    top_pad: float = 11,
+):
+    yy = row_top - top_pad
+    for ln in (lines or [""]):
+        _draw_text(c, x_left + 4, yy, ln, fs=fs)
+        yy -= ROW_LINE_H
+
+
+def _draw_summary_block(
+    c: canvas.Canvas,
+    x0: float,
+    x1: float,
+    y: float,
+    summary_text: str,
+) -> float:
+    if not (summary_text or "").strip():
+        return y
+
+    _draw_text(c, x0, y, "Invoice Summary", fs=FS_SM, bold=True)
+    y -= 14
+
+    text_w = x1 - x0
+    wrapped_lines: List[str] = []
+
+    for raw_line in (summary_text or "").splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            wrapped_lines.append("")
+            continue
+
+        wrapped = _wrap_lines(raw_line, "Helvetica", FS_XS, text_w - 8)
+        wrapped_lines.extend(wrapped if wrapped else [""])
+
+    line_gap = 11
+    for line in wrapped_lines:
+        if line == "":
+            y -= 6
+        else:
+            _draw_text(c, x0, y, line, fs=FS_XS)
+            y -= line_gap
+
+    y -= 6
+    _hr(c, x0, x1, y, lw=0.9, col=LIGHT_RULE)
+    y -= 18
+
+    return y
 
 
 def _draw_header_v2_invoice(c: canvas.Canvas, logo_path: str | None) -> float:
@@ -228,100 +425,6 @@ def _draw_header_v2_invoice(c: canvas.Canvas, logo_path: str | None) -> float:
 
     return y_rule - HEADER_BOTTOM_GAP
 
-def _wrap_paragraph_lines(text: str, fs: int, max_w: float, bold: bool = False) -> List[str]:
-    font = "Helvetica-Bold" if bold else "Helvetica"
-    out: List[str] = []
-    for para in (text or "").split("\n"):
-        para = para.strip()
-        if not para:
-            out.append("")
-            continue
-        out.extend(_wrap_lines(para, font, fs, max_w))
-    return out
-
-
-def _draw_multiline_block(
-    c: canvas.Canvas,
-    x: float,
-    y_top: float,
-    lines: List[str],
-    fs: int = FS_XS,
-    bold_first: bool = False,
-    line_gap: float = 11,
-    color=BLACK,
-) -> float:
-    """
-    Draws lines top-down starting at y_top.
-    Returns the bottom y after drawing.
-    """
-    y = y_top
-    for i, line in enumerate(lines):
-        is_bold = bold_first and i == 0
-        _draw_text(c, x, y, line, fs=fs, bold=is_bold, color=color)
-        y -= line_gap
-    return y
-
-def _draw_text_inline_segments(
-    c: canvas.Canvas,
-    x: float,
-    y: float,
-    segments: List[Tuple[str, bool]],
-    fs: int = FS_XS,
-    color=BLACK,
-):
-    cur_x = x
-    for text, bold in segments:
-        _set_font(c, fs, bold)
-        c.setFillColor(color)
-        c.drawString(cur_x, y, text)
-        cur_x += stringWidth(text, c._fontname, fs)
-    c.setFillColor(BLACK)
-
-def _draw_summary_block(
-    c: canvas.Canvas,
-    x0: float,
-    x1: float,
-    y: float,
-    summary_text: str,
-) -> float:
-    """
-    Draw Invoice Summary section.
-    Returns the next y position after the block.
-    """
-    if not (summary_text or "").strip():
-        return y
-
-    _draw_text(c, x0, y, "Invoice Summary", fs=FS_SM, bold=True)
-    y -= 14
-
-    text_w = x1 - x0
-    wrapped_lines: List[str] = []
-
-    # splitlines() preserves the intended new lines from BuildOps
-    for raw_line in (summary_text or "").splitlines():
-        raw_line = raw_line.strip()
-
-        # keep empty line spacing if one exists
-        if not raw_line:
-            wrapped_lines.append("")
-            continue
-
-        wrapped = _wrap_lines(raw_line, "Helvetica", FS_XS, text_w - 8)
-        wrapped_lines.extend(wrapped if wrapped else [""])
-
-    line_gap = 11
-    for line in wrapped_lines:
-        if line == "":
-            y -= 6
-        else:
-            _draw_text(c, x0, y, line, fs=FS_XS)
-            y -= line_gap
-
-    y -= 6
-    _hr(c, x0, x1, y, lw=0.9, col=LIGHT_RULE)
-    y -= 18
-
-    return y
 
 # ---------------- Footer stamping ----------------
 def _make_footer_overlay(page_num: int, page_count: int) -> bytes:
@@ -368,7 +471,7 @@ def _stamp_footer(pdf_bytes: bytes) -> bytes:
 def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | None = None) -> bytes:
     if not logo_path:
         logo_path = str(DEFAULT_LOGO)
-        
+
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
 
@@ -387,7 +490,6 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     bill_name = _s(normalized.get("billClient_name"))
     bill_lines = normalized.get("billClient_address_lines") or []
 
-    # phone/email (from mapper keys)
     bill_phone = _s(
         normalized.get("billClient_phone")
         or normalized.get("client_phone")
@@ -399,31 +501,31 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
         or normalized.get("customer_email")
     ).strip()
 
-    # ----- Bill To block (name/address left; phone/email right) -----
-    _draw_text(c, x0, y_left, bill_name, fs=FS_XS)
+    right_col_x = x0 + content_w * 0.58
 
-    # ✅ phone/email column X should align with "Property Name" column below
-    bill_contact_x = x0 + content_w * 0.34  # same as mid_x
+    meta_x = right_col_x
+    bill_contact_x = x0 + content_w * 0.31
 
-    # Phone on same row as Client Name
+    bill_left_w = (bill_contact_x - x0) - 12
+    bill_right_w = (meta_x - bill_contact_x) - 14
+
+    left_lines: List[str] = []
+    left_lines.extend(_wrap_text_to_width(bill_name, fs=FS_XS, max_w=bill_left_w))
+    for ln in bill_lines[:4]:
+        left_lines.extend(_wrap_text_to_width(_s(ln), fs=FS_XS, max_w=bill_left_w))
+
+    right_lines: List[str] = []
     if bill_phone:
-        _draw_text(c, bill_contact_x, y_left, bill_phone, fs=FS_XS)
-
-    # Address lines (left column) start on next row
-    for i, ln in enumerate(bill_lines[:4]):
-        _draw_text(c, x0, y_left - (i + 1) * 11, _s(ln), fs=FS_XS)
-
-    # Email on same row as Address Line 1
+        right_lines.extend(_wrap_text_to_width(bill_phone, fs=FS_XS, max_w=bill_right_w))
     if bill_email:
-        _draw_text(c, bill_contact_x, y_left - 11, bill_email, fs=FS_XS)
+        right_lines.extend(_wrap_text_to_width(bill_email, fs=FS_XS, max_w=bill_right_w))
 
-    # Height for rule below bill-to/meta block
-    left_line_count = 1 + min(4, len(bill_lines[:4]))  # name + address lines
-    right_line_count = (1 if bill_phone else 0) + (1 if bill_email else 0)  # phone + email
-    block_lines = max(left_line_count, right_line_count)
+    _draw_multiline_block(c, x0, y_left, left_lines or [""], fs=FS_XS, line_gap=11)
+    _draw_multiline_block(c, bill_contact_x, y_left, right_lines or [""], fs=FS_XS, line_gap=11)
+
+    block_lines = max(len(left_lines or [""]), len(right_lines or [""]))
 
     # Right side meta
-    meta_x = x0 + content_w * 0.52
     meta_y = y
 
     inv_no = _s(normalized.get("invoice_number"))
@@ -452,40 +554,68 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     _draw_text(c, meta_x, meta_y, "Due Date", fs=FS_XS)
     _draw_right(c, x1, meta_y, due, fs=FS_XS)
 
-    # ✅ divider line under whichever side is taller (bill-to vs meta)
     y = min(y_left - (block_lines * 11), meta_y) - 14
     _hr(c, x0, x1, y, lw=0.9, col=LIGHT_RULE)
     y -= 16
 
     # ===== Customer / Property grid =====
     left_x = x0
-    mid_x = x0 + content_w * 0.34
-    right_x = meta_x  # align Property Address with Invoice meta block
+    mid_x = x0 + content_w * 0.30
+    right_x = right_col_x
 
+    col_gap = 10
+    left_w = (mid_x - left_x) - col_gap
+    mid_w = (right_x - mid_x) - col_gap
+    right_w = x1 - right_x
+
+    # Row 1
     _draw_text(c, left_x, y, "Customer Name:", fs=FS_XS, bold=True)
-    _draw_text(c, left_x, y - 11, _s(normalized.get("customer_name")), fs=FS_XS)
-
     _draw_text(c, mid_x, y, "Property Name:", fs=FS_XS, bold=True)
-    _draw_text(c, mid_x, y - 11, _s(normalized.get("property_name")), fs=FS_XS)
-
     _draw_text(c, right_x, y, "Property Address:", fs=FS_XS, bold=True)
-    prop_lines = _normalize_property_address(normalized.get("property_address_lines") or [])
-    for i, ln in enumerate(prop_lines[:4]):
-        _draw_text(c, right_x, y - 11 - (i * 11), _s(ln), fs=FS_XS)
 
-    block_h = 11 + max(1, min(4, len(prop_lines))) * 11
-    y -= (block_h + 14)
+    row1_top = y - 11
 
+    customer_lines = _wrap_text_to_width(_s(normalized.get("customer_name")), fs=FS_XS, max_w=left_w)
+    property_name_lines = _wrap_text_to_width(_s(normalized.get("property_name")), fs=FS_XS, max_w=mid_w)
+
+    prop_addr_raw = _normalize_property_address(normalized.get("property_address_lines") or [])
+    property_addr_lines: List[str] = []
+    for ln in prop_addr_raw[:4]:
+        property_addr_lines.extend(_wrap_text_to_width(_s(ln), fs=FS_XS, max_w=right_w))
+
+    _draw_multiline_block(c, left_x, row1_top, customer_lines or [""], fs=FS_XS, line_gap=11)
+    _draw_multiline_block(c, mid_x, row1_top, property_name_lines or [""], fs=FS_XS, line_gap=11)
+    _draw_multiline_block(c, right_x, row1_top, property_addr_lines or [""], fs=FS_XS, line_gap=11)
+
+    row1_lines = max(
+        len(customer_lines or [""]),
+        len(property_name_lines or [""]),
+        len(property_addr_lines or [""]),
+    )
+    y = row1_top - (row1_lines * 11) - 10
+
+    # Row 2
     _draw_text(c, left_x, y, "Authorized by:", fs=FS_XS, bold=True)
-    _draw_text(c, left_x, y - 11, _s(normalized.get("authorized_by")), fs=FS_XS)
-
     _draw_text(c, mid_x, y, "Customer WO:", fs=FS_XS, bold=True)
-    _draw_text(c, mid_x, y - 11, _s(normalized.get("customerProvidedWONumber")), fs=FS_XS)
-
     _draw_text(c, right_x, y, "NTE:", fs=FS_XS, bold=True)
-    _draw_text(c, right_x, y - 11, _s(normalized.get("nte")), fs=FS_XS)
 
-    y -= 26
+    row2_top = y - 11
+
+    authorized_lines = _wrap_text_to_width(_s(normalized.get("authorized_by")), fs=FS_XS, max_w=left_w)
+    wo_lines = _wrap_text_to_width(_s(normalized.get("customerProvidedWONumber")), fs=FS_XS, max_w=mid_w)
+    nte_lines = _wrap_text_to_width(_s(normalized.get("nte")), fs=FS_XS, max_w=right_w)
+
+    _draw_multiline_block(c, left_x, row2_top, authorized_lines or [""], fs=FS_XS, line_gap=11)
+    _draw_multiline_block(c, mid_x, row2_top, wo_lines or [""], fs=FS_XS, line_gap=11)
+    _draw_multiline_block(c, right_x, row2_top, nte_lines or [""], fs=FS_XS, line_gap=11)
+
+    row2_lines = max(
+        len(authorized_lines or [""]),
+        len(wo_lines or [""]),
+        len(nte_lines or [""]),
+    )
+    y = row2_top - (row2_lines * 11) - 10
+
     _hr(c, x0, x1, y, lw=0.9, col=LIGHT_RULE)
     y -= 18
 
@@ -503,7 +633,6 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     # ===== Invoice Summary =====
     summary_text = _s(normalized.get("invoice_summary")).strip()
     if summary_text:
-        # estimate space before drawing
         est_lines: List[str] = []
         for raw_line in summary_text.splitlines():
             raw_line = raw_line.strip()
@@ -514,44 +643,32 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
 
         est_h = 14 + (len(est_lines) * 11) + 20
         ensure_space(est_h)
-
         y = _draw_summary_block(c, x0, x1, y, summary_text)
 
-
-    # ===== Columns (ONE money column: Price) =====
+    # ===== Columns =====
     def build_cols_shared_fixed() -> tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
-        date_w = 0.90 * inch
-        name_w = 1.30 * inch
-        code_w = 0.85 * inch
-        taxable_w = 0.65 * inch
-        qty_w = 0.55 * inch
-        unit_w = 0.85 * inch
-
-        # single money column, narrow so it sits closer to Rate/Unit Price
-        money_w = 0.95 * inch
+        date_w = 0.82 * inch
+        name_w = 1.05 * inch
+        code_w = 0.95 * inch
+        taxable_w = 0.60 * inch
+        qty_w = 0.50 * inch
+        unit_w = 0.78 * inch
+        money_w = 0.82 * inch
 
         fixed_used = date_w + name_w + code_w + taxable_w + qty_w + unit_w + money_w
-        min_desc = 1.55 * inch
+        min_desc = 1.90 * inch
         desc_w = content_w - fixed_used
 
         if desc_w < min_desc:
-            deficit = (min_desc - desc_w)
-            min_name = 1.05 * inch
-            min_code = 0.60 * inch
-
-            shrink_name = min(deficit * 0.60, max(0.0, name_w - min_name))
-            shrink_code = min(deficit * 0.40, max(0.0, code_w - min_code))
-
+            deficit = min_desc - desc_w
+            shrink_name = min(0.15 * inch, deficit)
             name_w -= shrink_name
-            code_w -= shrink_code
-
             fixed_used = date_w + name_w + code_w + taxable_w + qty_w + unit_w + money_w
-            desc_w = max(min_desc, content_w - fixed_used)
+            desc_w = content_w - fixed_used
 
         labor_cols = [
             ("Date", date_w),
-            ("Labor Name", name_w),
-            ("", code_w),  # spacer
+            ("Labor Name", name_w + code_w),
             ("Description", desc_w),
             ("Taxable", taxable_w),
             ("Hours", qty_w),
@@ -575,6 +692,7 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
 
     LABOR_TAIL_LABELS = {"Taxable", "Hours", "Rate", "Price"}
     PARTS_TAIL_LABELS = {"Taxable", "Qty", "Unit Price", "Price"}
+    NUMERIC_HEADER_LABELS = {"Hours", "Rate", "Qty", "Unit Price", "Price"}
 
     def draw_table_header(cols: List[Tuple[str, float]], y_top: float, tail_labels: set[str]):
         _rect_fill(c, x0, y_top - TABLE_HDR_H, content_w, TABLE_HDR_H, BLACK)
@@ -584,8 +702,7 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
                 x += w
                 continue
 
-            # Right-align money header
-            if label == "Price":
+            if label in NUMERIC_HEADER_LABELS:
                 _draw_right(c, x + w - 4, y_top - 12, label, fs=FS_XS, bold=True, color=WHITE)
                 x += w
                 continue
@@ -601,15 +718,6 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
 
             x += w
 
-    def draw_wrapped_left(x_left: float, w: float, row_top: float, row_h: float, lines: List[str]):
-        base = _vcenter_baseline(row_top, row_h, FS_XS)
-        n = max(1, len(lines))
-        start_y = base + ((n - 1) * ROW_LINE_H) / 2.0
-        yy = start_y
-        for ln in (lines or [""]):
-            _draw_text(c, x_left + 4, yy, ln, fs=FS_XS)
-            yy -= ROW_LINE_H
-
     # ===== Labor =====
     _draw_text(c, x0, y, "Labor", fs=FS_SM, bold=True)
     y -= 12
@@ -622,22 +730,29 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     labor_total_amt = 0.0
 
     for r in labor_rows:
-        desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, labor_cols[3][1] - 10)
-        row_h = _compute_row_h(len(desc_lines))
+        date_lines = _wrap_lines(_s(r.get("date")), "Helvetica", FS_XS, labor_cols[0][1] - 8)
+        name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, labor_cols[1][1] - 8)
+        desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, labor_cols[2][1] - 8)
+
+        row_line_count = max(
+            len(date_lines),
+            len(name_lines),
+            len(desc_lines),
+            1,
+        )
+        row_h = _compute_row_h(row_line_count)
         ensure_space(row_h + 8)
 
         row_top = y
-        y_base = _vcenter_baseline(row_top, row_h, FS_XS)
+        y_base = row_top - 11
 
         x = x0
-        _draw_text(c, x + 4, y_base, _s(r.get("date")), fs=FS_XS); x += labor_cols[0][1]
-        _draw_text(c, x + 4, y_base, _s(r.get("name")), fs=FS_XS); x += labor_cols[1][1]
-        x += labor_cols[2][1]  # spacer
-
-        draw_wrapped_left(x, labor_cols[3][1], row_top=row_top, row_h=row_h, lines=desc_lines); x += labor_cols[3][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=date_lines); x += labor_cols[0][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=name_lines); x += labor_cols[1][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=desc_lines); x += labor_cols[2][1]
 
         taxable = "Yes" if bool(r.get("taxable")) else "No"
-        _draw_center(c, x, labor_cols[4][1], y_base, taxable, fs=FS_XS); x += labor_cols[4][1]
+        _draw_center(c, x, labor_cols[3][1], y_base, taxable, fs=FS_XS); x += labor_cols[3][1]
 
         hours = float(r.get("hours") or 0)
         rate = float(r.get("rate") or 0)
@@ -646,21 +761,19 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
         labor_total_hours += hours
         labor_total_amt += amount
 
-        _draw_right(c, x + labor_cols[5][1] - 4, y_base, f"{hours:g}", fs=FS_XS); x += labor_cols[5][1]
-        _draw_right(c, x + labor_cols[6][1] - 4, y_base, _money(rate), fs=FS_XS); x += labor_cols[6][1]
-        _draw_right(c, x + labor_cols[7][1] - 4, y_base, _money(amount), fs=FS_XS)
+        _draw_right(c, x + labor_cols[4][1] - 4, y_base, f"{hours:g}", fs=FS_XS); x += labor_cols[4][1]
+        _draw_right(c, x + labor_cols[5][1] - 4, y_base, _money(rate), fs=FS_XS); x += labor_cols[5][1]
+        _draw_right(c, x + labor_cols[6][1] - 4, y_base, _money(amount), fs=FS_XS)
 
-        # underline spans full table width
         _hr(c, x0, x1, y - row_h, lw=0.6, col=LIGHT_RULE)
         y -= row_h
 
-    # Labor total row (full width grey bar)
     ensure_space(24)
     _rect_fill(c, x0, y - 16, content_w, 16, GREY_TOTAL)
 
-    x_desc_end = x0 + sum(w for _, w in labor_cols[:4])   # end of description block
-    x_hours_end = x0 + sum(w for _, w in labor_cols[:6])  # through Hours column
-    x_table_end = x0 + sum(w for _, w in labor_cols)      # equals x1
+    x_desc_end = x0 + sum(w for _, w in labor_cols[:3])
+    x_hours_end = x0 + sum(w for _, w in labor_cols[:5])
+    x_table_end = x0 + sum(w for _, w in labor_cols)
 
     y_mid = y - 12
     _draw_right(c, x_desc_end - 6, y_mid, "Labor Total", fs=FS_XS, bold=True)
@@ -682,19 +795,29 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     parts_total_amt = 0.0
 
     for r in parts_rows:
-        desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, parts_cols[3][1] - 10)
-        row_h = _compute_row_h(len(desc_lines))
+        date_lines = _wrap_lines(_s(r.get("date")), "Helvetica", FS_XS, parts_cols[0][1] - 8)
+        name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, parts_cols[1][1] - 8)
+        code_lines = _wrap_lines(_s(r.get("code")), "Helvetica", FS_XS, parts_cols[2][1] - 8)
+        desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, parts_cols[3][1] - 8)
+
+        row_line_count = max(
+            len(date_lines),
+            len(name_lines),
+            len(code_lines),
+            len(desc_lines),
+            1,
+        )
+        row_h = _compute_row_h(row_line_count)
         ensure_space(row_h + 8)
 
         row_top = y
-        y_base = _vcenter_baseline(row_top, row_h, FS_XS)
+        y_base = row_top - 11
 
         x = x0
-        _draw_text(c, x + 4, y_base, _s(r.get("date")), fs=FS_XS); x += parts_cols[0][1]
-        _draw_text(c, x + 4, y_base, _s(r.get("name")), fs=FS_XS); x += parts_cols[1][1]
-        _draw_text(c, x + 4, y_base, _s(r.get("code")), fs=FS_XS); x += parts_cols[2][1]
-
-        draw_wrapped_left(x, parts_cols[3][1], row_top=row_top, row_h=row_h, lines=desc_lines); x += parts_cols[3][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=date_lines); x += parts_cols[0][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=name_lines); x += parts_cols[1][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=code_lines); x += parts_cols[2][1]
+        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=desc_lines); x += parts_cols[3][1]
 
         taxable = "Yes" if bool(r.get("taxable")) else "No"
         _draw_center(c, x, parts_cols[4][1], y_base, taxable, fs=FS_XS); x += parts_cols[4][1]
@@ -710,11 +833,9 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
         _draw_right(c, x + parts_cols[6][1] - 4, y_base, _money(unit_price), fs=FS_XS); x += parts_cols[6][1]
         _draw_right(c, x + parts_cols[7][1] - 4, y_base, _money(amount), fs=FS_XS)
 
-        # underline spans full table width
         _hr(c, x0, x1, y - row_h, lw=0.6, col=LIGHT_RULE)
         y -= row_h
 
-    # Parts total row (full width grey bar)
     ensure_space(24)
     _rect_fill(c, x0, y - 16, content_w, 16, GREY_TOTAL)
 
@@ -730,74 +851,111 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     # space before totals block
     y -= 28
 
-    # Payment Options
+    # ===== Totals block + Payment Options =====
     payment_title = "Payment Options:"
 
-    # ===== Totals block + Payment Options =====
     summary_w = 3.25 * inch
     sx1 = x1
     sx0 = sx1 - summary_w
 
-    # payment block sits to the left of totals block
-    payment_gap = 0.35 * inch
     payment_x0 = x0 + 2
-    
-    
+    payment_w = (sx0 - payment_x0) - 14
 
     label_x = sx1 - 120
     value_x = sx1
 
-    row_h = 16
+    totals_row_h = 16
     bar_h = 18
 
+    PAY_TITLE_FS = FS
+    PAY_BODY_FS = FS_SM
     payment_line_gap = 11
 
-    payment_render_lines: List[List[Tuple[str, bool]]] = [
-        [(payment_title, True)],
-        [("Pay securely using the payment link in the invoice email", False)],
-        [("Card payments are not accepted for invoices over $5,000", False)],
-        [("E-Transfer:", True), (" accounting@mainlinefire.com", False)],
-        [("EFT:", True), (" Transit 21642 • Institution 001 • Account 1001460", False)],
-        [("HST Registration No.:", True), (" 812882488", False)],
-        [("Please reference your invoice number with payment.", False)],
-        [("Questions? Call 647-325-8577.", False)],
+    payment_render_lines: List[Tuple[List[Tuple[str, bool]], int]] = [
+        ([(payment_title, True)], PAY_TITLE_FS),
+        ([("Pay securely using the payment link in the invoice email", False)], PAY_BODY_FS),
+        ([("Card payments are not accepted for invoices over $5,000", False)], PAY_BODY_FS),
+        ([("E-Transfer:", True), (" accounting@mainlinefire.com", False)], PAY_BODY_FS),
+        ([("EFT:", True), (" Transit 21642 • Institution 001 • Account 1001460", False)], PAY_BODY_FS),
+        ([("HST Registration No.:", True), (" 812882488", False)], PAY_BODY_FS),
+        ([("Please reference your invoice number with payment.", False)], PAY_BODY_FS),
+        ([("Questions? Call 647-325-8577.", False)], PAY_BODY_FS),
     ]
 
-    payment_h = len(payment_render_lines) * payment_line_gap
+    def wrap_inline_segments(
+        segments: List[Tuple[str, bool]],
+        fs: int,
+        max_w: float,
+    ) -> List[List[Tuple[str, bool]]]:
+        out_lines: List[List[Tuple[str, bool]]] = []
+        cur_line: List[Tuple[str, bool]] = []
+        cur_text = ""
 
+        def flush():
+            nonlocal cur_line, cur_text
+            if cur_line:
+                out_lines.append(cur_line)
+            cur_line = []
+            cur_text = ""
+
+        for seg_text, seg_bold in segments:
+            words = seg_text.split(" ")
+            for i, word in enumerate(words):
+                token = word if i == 0 else " " + word
+                trial = cur_text + token
+                font = "Helvetica-Bold" if seg_bold else "Helvetica"
+
+                if not cur_text:
+                    cur_line.append((token, seg_bold))
+                    cur_text = token
+                    continue
+
+                if stringWidth(trial, font, fs) <= max_w:
+                    cur_line.append((token, seg_bold))
+                    cur_text += token
+                else:
+                    flush()
+                    cur_line.append((word, seg_bold))
+                    cur_text = word
+
+        flush()
+        return out_lines or [[]]
+
+    wrapped_payment_lines: List[Tuple[List[Tuple[str, bool]], int]] = []
+    for segs, fs_now in payment_render_lines:
+        wrapped = wrap_inline_segments(segs, fs_now, payment_w)
+        for line in wrapped:
+            wrapped_payment_lines.append((line, fs_now))
+
+    payment_h = len(wrapped_payment_lines) * payment_line_gap
     approx_rows = 9
-    totals_h = (approx_rows * row_h) + bar_h + 20
-
-    # reserve enough space for whichever side is taller
+    totals_h = (approx_rows * totals_row_h) + bar_h + 20
     needed_h = max(payment_h, totals_h)
+
     if y - needed_h < (M_B + 0.35 * inch):
         new_page()
 
-    # ---- left payment block ----
+    # payment block
     payment_top = y - 10
     py = payment_top
-    PAY_TITLE_FS = FS        # 9 pt
-    PAY_BODY_FS = FS_SM      # 8 pt
-
-    for idx, segments in enumerate(payment_render_lines):
-        this_fs = PAY_TITLE_FS if idx == 0 else PAY_BODY_FS
-        _draw_text_inline_segments(c, payment_x0, py, segments, fs=this_fs)
+    for segments, fs_now in wrapped_payment_lines:
+        _draw_text_inline_segments(c, payment_x0, py, segments, fs=fs_now)
         py -= payment_line_gap
 
-    # ---- right totals block ----
+    # totals block
     def rule(y_line: float):
         _hr(c, sx0, sx1, y_line, lw=0.9, col=LIGHT_RULE)
 
     def totals_row(label: str, value: str, bold: bool = False, top_rule: bool = True):
         nonlocal y
         top = y
-        bottom = y - row_h
+        bottom = y - totals_row_h
 
         if top_rule:
             rule(top)
         rule(bottom)
 
-        baseline = bottom + (row_h / 2.0) - (FS_XS * 0.35)
+        baseline = bottom + (totals_row_h / 2.0) - (FS_XS * 0.35)
         _draw_right(c, label_x, baseline, label, fs=FS_XS, bold=bold)
         _draw_right(c, value_x, baseline, value, fs=FS_XS, bold=bold)
 
@@ -824,7 +982,6 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     totals_row("Amount Paid", _money(normalized.get("amount_paid")))
     totals_row("Balance", _money(normalized.get("balance")), bold=True)
 
-    # move y below whichever column extends lower
     payment_bottom = payment_top - payment_h
     y = min(y, payment_bottom) - 8
 

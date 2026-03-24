@@ -963,13 +963,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "EMAIL_REPLY_TO",
                 "support@mainlinefire.com",
             )
-        print("DEBUG SEND", {
-            "doc_id": real_doc_id,
-            "doc_type": doc_type,
-            "reviewable": reviewable,
-            "email_from": email_from,
-            "email_reply_to": email_reply_to,
-        })
+            
         send_email_brevo_smtp(
             to_email=to_email,
             subject=subject,
