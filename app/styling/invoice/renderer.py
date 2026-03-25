@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import re
 from typing import Any, Dict, List, Tuple
+from datetime import datetime
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
@@ -78,6 +79,20 @@ def _money(v: Any) -> str:
         return f"${n:,.2f}"
     except Exception:
         return _s(v)
+    
+def _display_row_date(v: Any) -> str:
+    s = _s(v).strip()
+    if not s:
+        return ""
+
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+            dt = datetime.strptime(s, "%Y-%m-%d")
+            return dt.strftime("%b %d, %Y")
+    except Exception:
+        pass
+
+    return s
 
 
 def _set_font(c: canvas.Canvas, fs: int, bold: bool = False):
@@ -730,7 +745,7 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     labor_total_amt = 0.0
 
     for r in labor_rows:
-        date_lines = _wrap_lines(_s(r.get("date")), "Helvetica", FS_XS, labor_cols[0][1] - 8)
+        date_lines = _wrap_lines(_display_row_date(r.get("date")), "Helvetica", FS_XS, labor_cols[0][1] - 8)
         name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, labor_cols[1][1] - 8)
         desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, labor_cols[2][1] - 8)
 
@@ -795,7 +810,7 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     parts_total_amt = 0.0
 
     for r in parts_rows:
-        date_lines = _wrap_lines(_s(r.get("date")), "Helvetica", FS_XS, parts_cols[0][1] - 8)
+        date_lines = _wrap_lines(_display_row_date(r.get("date")), "Helvetica", FS_XS, parts_cols[0][1] - 8)
         name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, parts_cols[1][1] - 8)
         code_lines = _wrap_lines(_s(r.get("code")), "Helvetica", FS_XS, parts_cols[2][1] - 8)
         desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, parts_cols[3][1] - 8)

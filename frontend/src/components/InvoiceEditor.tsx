@@ -1,4 +1,3 @@
-// frontend/src/components/InvoiceEditor.tsx
 import React, { useMemo } from "react";
 import { recomputeInvoiceTotals } from "../panels/invoice/totals";
 
@@ -10,7 +9,6 @@ type LaborRow = {
   hours?: number;
   rate?: number;
   price?: number | string;
-  unit?: string;
 };
 
 type PartRow = {
@@ -22,7 +20,6 @@ type PartRow = {
   qty?: number;
   unit_price?: number;
   price?: number | string;
-  unit?: string;
 };
 
 export type InvoiceFields = {
@@ -81,6 +78,21 @@ function amountCell(value: number) {
   return `$${(Math.round(value * 100) / 100).toFixed(2)}`;
 }
 
+function toInputDate(v?: string): string {
+  const s = String(v || "").trim();
+  if (!s) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
+}
+
+function fromInputDate(v: string): string {
+  return v || "";
+}
+
 export default function InvoiceEditor(props: {
   value: InvoiceFields;
   onChange: (v: InvoiceFields) => void;
@@ -89,6 +101,7 @@ export default function InvoiceEditor(props: {
   canSave: boolean;
 }) {
   const v = useMemo(() => recomputeInvoiceTotals(props.value), [props.value]);
+  const defaultLineDate = toInputDate(props.value.issued_date);
 
   React.useEffect(() => {
     const next = recomputeInvoiceTotals(props.value);
@@ -131,8 +144,6 @@ export default function InvoiceEditor(props: {
     const rate = num(nextRow.rate);
     nextRow.price = Math.round(hours * rate * 100) / 100;
 
-    if (!nextRow.unit) nextRow.unit = "hr";
-
     rows[idx] = nextRow;
     props.onChange({ ...props.value, labor_rows: rows });
   };
@@ -145,8 +156,6 @@ export default function InvoiceEditor(props: {
     const unit = num(nextRow.unit_price);
     nextRow.price = Math.round(qty * unit * 100) / 100;
 
-    if (!nextRow.unit) nextRow.unit = "ea";
-
     rows[idx] = nextRow;
     props.onChange({ ...props.value, parts_rows: rows });
   };
@@ -154,13 +163,12 @@ export default function InvoiceEditor(props: {
   const addLabor = () => {
     const rows = [...(props.value.labor_rows || [])];
     rows.push({
-      date: props.value.issued_date || "",
+      date: defaultLineDate,
       name: "Labor",
       description: "",
       taxable: false,
       hours: 1,
       rate: 0,
-      unit: "hr",
       price: 0,
     });
     props.onChange({ ...props.value, labor_rows: rows });
@@ -169,13 +177,12 @@ export default function InvoiceEditor(props: {
   const addPart = () => {
     const rows = [...(props.value.parts_rows || [])];
     rows.push({
-      date: props.value.issued_date || "",
+      date: defaultLineDate,
       name: "",
       code: "",
       description: "",
       taxable: true,
       qty: 1,
-      unit: "ea",
       unit_price: 0,
       price: 0,
     });
@@ -195,6 +202,7 @@ export default function InvoiceEditor(props: {
   return (
     <div style={{ padding: 12 }}>
       <div style={{ fontWeight: 900, marginBottom: 8 }}>Invoice Info</div>
+
       <div className="row gap8" style={{ marginBottom: 10 }}>
         <input
           className="input"
@@ -283,8 +291,9 @@ export default function InvoiceEditor(props: {
       </div>
 
       <div className="invTableHeader">
+        <div>Date</div>
+        <div>Item Name</div>
         <div>Description</div>
-        <div>Unit</div>
         <div>Qty</div>
         <div>Unit Price</div>
         <div>Taxable</div>
@@ -301,15 +310,21 @@ export default function InvoiceEditor(props: {
           <div key={i} className="invTableRow">
             <input
               className="input"
-              placeholder="Item description"
-              value={r.description || r.name || ""}
-              onChange={(e) => setLabor(i, { description: e.target.value })}
+              type="date"
+              value={toInputDate(r.date)}
+              onChange={(e) => setLabor(i, { date: fromInputDate(e.target.value) })}
             />
             <input
               className="input"
-              placeholder="hr"
-              value={r.unit || "hr"}
-              onChange={(e) => setLabor(i, { unit: e.target.value })}
+              placeholder="Item name"
+              value={r.name || ""}
+              onChange={(e) => setLabor(i, { name: e.target.value })}
+            />
+            <input
+              className="input"
+              placeholder="Item description"
+              value={r.description || ""}
+              onChange={(e) => setLabor(i, { description: e.target.value })}
             />
             <input
               className="input"
@@ -353,8 +368,10 @@ export default function InvoiceEditor(props: {
       </div>
 
       <div className="invTableHeader">
+        <div>Date</div>
+        <div>Item Name</div>
+        <div>Item Code</div>
         <div>Description</div>
-        <div>Unit</div>
         <div>Qty</div>
         <div>Unit Price</div>
         <div>Taxable</div>
@@ -366,21 +383,32 @@ export default function InvoiceEditor(props: {
         const qty = num(r.qty);
         const unitPrice = num(r.unit_price);
         const amount = m(r.price);
-        const description = r.description || r.name || "";
 
         return (
           <div key={i} className="invTableRow">
             <input
               className="input"
-              placeholder="Item description"
-              value={description}
-              onChange={(e) => setPart(i, { description: e.target.value })}
+              type="date"
+              value={toInputDate(r.date)}
+              onChange={(e) => setPart(i, { date: fromInputDate(e.target.value) })}
             />
             <input
               className="input"
-              placeholder="ea"
-              value={r.unit || "ea"}
-              onChange={(e) => setPart(i, { unit: e.target.value })}
+              placeholder="Item name"
+              value={r.name || ""}
+              onChange={(e) => setPart(i, { name: e.target.value })}
+            />
+            <input
+              className="input"
+              placeholder="Item code"
+              value={r.code || ""}
+              onChange={(e) => setPart(i, { code: e.target.value })}
+            />
+            <input
+              className="input"
+              placeholder="Item description"
+              value={r.description || ""}
+              onChange={(e) => setPart(i, { description: e.target.value })}
             />
             <input
               className="input"
@@ -452,22 +480,34 @@ export default function InvoiceEditor(props: {
         </div>
 
         <div className="row gap8" style={{ marginBottom: 10 }}>
-          <div className="input" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div
+            className="input"
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          >
             <span className="mutedSmall">Subtotal</span>
             <b>{v.subtotal}</b>
           </div>
 
-          <div className="input" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div
+            className="input"
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          >
             <span className="mutedSmall">Subtotal After Discount/Fees</span>
             <b>{v.subtotal_after_discount_fees}</b>
           </div>
 
-          <div className="input" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div
+            className="input"
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          >
             <span className="mutedSmall">Tax</span>
             <b>{v.tax_amount}</b>
           </div>
 
-          <div className="input" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div
+            className="input"
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          >
             <span className="mutedSmall">Total</span>
             <b>{v.total}</b>
           </div>

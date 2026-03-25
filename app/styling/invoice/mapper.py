@@ -47,7 +47,19 @@ def _fmt_date_from_epoch_seconds(v: Any) -> str:
     except Exception:
         return ""
 
-
+def _iso_date_from_epoch_seconds(v: Any) -> str:
+    if v is None or v == "":
+        return ""
+    try:
+        sec = int(str(v).strip())
+        if TORONTO_TZ:
+            dt = datetime.fromtimestamp(sec, tz=TORONTO_TZ)
+        else:
+            dt = datetime.fromtimestamp(sec)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+    
 def _pick_invoice_address(invoice: Dict[str, Any], address_type: str) -> Optional[Dict[str, Any]]:
     for a in (invoice.get("addresses") or []):
         if (a or {}).get("addressType") == address_type:
@@ -234,6 +246,7 @@ def map_buildops_invoice_to_pdf_data(
     # -------------------------
     invoice_number = str(invoice.get("invoiceNumber") or "").strip()
     issued_date = _fmt_date_from_epoch_seconds(invoice.get("issuedDate"))
+    issued_date_iso = _iso_date_from_epoch_seconds(invoice.get("issuedDate"))
     due_date = _fmt_date_from_epoch_seconds(invoice.get("dueDate"))
     job_number = str(invoice.get("jobNumber") or "").strip()
 
@@ -269,7 +282,7 @@ def map_buildops_invoice_to_pdf_data(
         taxable = bool(it.get("taxable"))
 
         # You can switch this later to item audit date if needed.
-        line_date = issued_date
+        line_date = issued_date_iso or issued_date
 
         if t == "Fee":
             service_fee_total += amount
@@ -339,6 +352,7 @@ def map_buildops_invoice_to_pdf_data(
         # Invoice meta
         "invoice_number": invoice_number,
         "issued_date": issued_date,
+        "issued_date_iso": issued_date_iso,
         "due_date": due_date,
         "job_number": job_number,
         "po_number": po_number,
