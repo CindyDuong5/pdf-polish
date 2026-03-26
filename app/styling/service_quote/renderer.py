@@ -20,7 +20,7 @@ from app.styling.service_quote.parser import ServiceQuoteData
 
 
 # =========================
-# Page + layout constants (tuned to match V2)
+# Page + layout constants
 # =========================
 
 PAGE_MARGIN_L = 0.60 * inch
@@ -339,7 +339,7 @@ def _draw_footer_v2(
     ps: PageSpec,
     page_no: int,
     total_pages: int,
-    font_regular: str
+    font_regular: str,
 ) -> None:
     x0 = _x0()
     x1 = _x1(ps)
@@ -354,7 +354,7 @@ def _draw_footer_v2(
 
 
 # =========================
-# First-page sections (info row, title/desc)
+# First-page sections
 # =========================
 
 def _draw_info_row_v2(
@@ -468,7 +468,7 @@ def _draw_title_and_desc_v2(
 
 
 # =========================
-# Items (build, estimate, draw)
+# Items
 # =========================
 
 def _build_item_blocks(data: ServiceQuoteData) -> List[ItemBlock]:
@@ -632,7 +632,7 @@ def _draw_totals_v2(
 
 
 # =========================
-# Included / exclusions section
+# Included / exclusions
 # =========================
 
 def _resolved_exclusions(data: ServiceQuoteData) -> List[str]:
@@ -735,7 +735,7 @@ def _draw_included_exclusions_section_v2(
 
 
 # =========================
-# Pagination helpers (no drawing)
+# Pagination helpers
 # =========================
 
 def _calc_header_bottom_y(ps: PageSpec) -> float:
@@ -806,6 +806,11 @@ def _paginate_item_blocks(
     continued_page_y_start: float,
     font_regular: str,
 ) -> Tuple[List[List[ItemBlock]], List[float]]:
+    """
+    Returns:
+      - pages: item blocks assigned to each page
+      - end_ys: y cursor after drawing all item blocks on each page
+    """
     pages: List[List[ItemBlock]] = []
     end_ys: List[float] = []
 
@@ -815,10 +820,13 @@ def _paginate_item_blocks(
     for b in blocks:
         need_h = _estimate_block_height(ps, b, font_regular)
 
-        if (y - need_h) < CONTENT_BOTTOM and cur_page:
-            pages.append(cur_page)
-            end_ys.append(y)
-            cur_page = []
+        # If the next block does not fit, move to a new page BEFORE adding it.
+        if (y - need_h) < CONTENT_BOTTOM:
+            if cur_page:
+                pages.append(cur_page)
+                end_ys.append(y)
+                cur_page = []
+
             y = continued_page_y_start
 
         cur_page.append(b)
@@ -841,11 +849,11 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     blocks = _build_item_blocks(data)
 
-    # --- Pre-calc y starts ---
+    # ---- Pre-calc y starts ----
     first_items_y = _calc_first_page_items_y(ps, data, font_regular)
     continued_content_y = _calc_header_bottom_y(ps) - CONTINUED_TOP_GAP
 
-    item_pages, _ = _paginate_item_blocks(
+    item_pages, item_end_ys = _paginate_item_blocks(
         ps,
         blocks,
         first_page_y_start=first_items_y,
@@ -853,32 +861,20 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
         font_regular=font_regular,
     )
 
-    # --- Pre-check: do totals fit on last items page? ---
-    totals_need_own_page = False
-    if item_pages:
-        y_est = continued_content_y if (len(item_pages) > 1) else first_items_y
-        for b in item_pages[-1]:
-            y_est -= _estimate_block_height(ps, b, font_regular)
-
-        if (y_est - TOTALS_HEIGHT_EST) < CONTENT_BOTTOM:
-            totals_need_own_page = True
-    else:
-        y_est = first_items_y
-
+    last_items_end_y = item_end_ys[-1] if item_end_ys else first_items_y
     included_h_est = _estimate_included_exclusions_height(ps, font_regular, data)
 
-    # --- Pre-check: does Included/Exclusions fit right after totals on the same page? ---
-    included_need_own_page = False
+    # ---- Decide totals placement deterministically ----
+    totals_need_own_page = (last_items_end_y - TOTALS_HEIGHT_EST) < CONTENT_BOTTOM
+
     if totals_need_own_page:
-        y_after_totals_est = continued_content_y - TOTALS_HEIGHT_EST
-        y_after_totals_est -= P2_TOP_BLANK
-        if (y_after_totals_est - included_h_est) < CONTENT_BOTTOM:
-            included_need_own_page = True
+        totals_page_y_after = continued_content_y - TOTALS_HEIGHT_EST
+        included_start_y = totals_page_y_after - P2_TOP_BLANK
     else:
-        y_after_totals_est = y_est - TOTALS_HEIGHT_EST
-        y_after_totals_est -= P2_TOP_BLANK
-        if (y_after_totals_est - included_h_est) < CONTENT_BOTTOM:
-            included_need_own_page = True
+        totals_same_page_y_after = last_items_end_y - TOTALS_HEIGHT_EST
+        included_start_y = totals_same_page_y_after - P2_TOP_BLANK
+
+    included_need_own_page = (included_start_y - included_h_est) < CONTENT_BOTTOM
 
     total_pages = (
         len(item_pages)
@@ -893,45 +889,76 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     # ---- Draw item pages ----
     for idx, page_blocks in enumerate(item_pages):
-        y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
+        y = _draw_header_v2(
+            c,
+            ps,
+            logo_path=logo_path,
+            font_regular=font_regular,
+            font_bold=font_bold,
+        )
 
         if idx == 0:
-            y = _draw_info_row_v2(c, ps, y_top=y, data=data, font_regular=font_regular, font_bold=font_bold)
-            y = _draw_title_and_desc_v2(c, ps, y_top=y, data=data, font_regular=font_regular, font_bold=font_bold)
+            y = _draw_info_row_v2(
+                c,
+                ps,
+                y_top=y,
+                data=data,
+                font_regular=font_regular,
+                font_bold=font_bold,
+            )
+            y = _draw_title_and_desc_v2(
+                c,
+                ps,
+                y_top=y,
+                data=data,
+                font_regular=font_regular,
+                font_bold=font_bold,
+            )
         else:
             y = y - CONTINUED_TOP_GAP
 
         cur_y = y
 
         for b in page_blocks:
+            # Safety check only. In normal flow, pre-pagination should already prevent overflow.
             need_h = _estimate_block_height(ps, b, font_regular)
             if (cur_y - need_h) < CONTENT_BOTTOM:
                 _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
                 c.showPage()
                 page_no += 1
 
-                cur_y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
+                cur_y = _draw_header_v2(
+                    c,
+                    ps,
+                    logo_path=logo_path,
+                    font_regular=font_regular,
+                    font_bold=font_bold,
+                )
                 cur_y = cur_y - CONTINUED_TOP_GAP
 
-            cur_y = _draw_item_block_at_y(c, ps, b, y=cur_y, font_regular=font_regular, font_bold=font_bold)
+            cur_y = _draw_item_block_at_y(
+                c,
+                ps,
+                b,
+                y=cur_y,
+                font_regular=font_regular,
+                font_bold=font_bold,
+            )
 
-        is_last_items_page = (idx == len(item_pages) - 1)
+        is_last_items_page = idx == len(item_pages) - 1
 
-        if is_last_items_page and (not totals_need_own_page):
-            if (cur_y - TOTALS_HEIGHT_EST) < CONTENT_BOTTOM:
-                _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
-                c.showPage()
-                page_no += 1
+        if is_last_items_page and not totals_need_own_page:
+            cur_y = _draw_totals_v2(
+                c,
+                ps,
+                y_top=cur_y,
+                data=data,
+                font_regular=font_regular,
+                font_bold=font_bold,
+            )
 
-                cur_y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
-                cur_y = cur_y - CONTINUED_TOP_GAP
-                totals_need_own_page = True
-                included_need_own_page = True
-
-            cur_y = _draw_totals_v2(c, ps, y_top=cur_y, data=data, font_regular=font_regular, font_bold=font_bold)
-
-            y_section_top = cur_y - P2_TOP_BLANK
-            if not included_need_own_page and (y_section_top - included_h_est) >= CONTENT_BOTTOM:
+            if not included_need_own_page:
+                y_section_top = cur_y - P2_TOP_BLANK
                 _draw_included_exclusions_section_v2(
                     c,
                     ps,
@@ -941,17 +968,36 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
                 )
 
         _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
-        c.showPage()
-        page_no += 1
+
+        has_more_item_pages = idx < len(item_pages) - 1
+        needs_more_pages_after_this = has_more_item_pages or totals_need_own_page or included_need_own_page
+
+        if needs_more_pages_after_this:
+            c.showPage()
+            page_no += 1
 
     # ---- Totals page (if needed) ----
     if totals_need_own_page:
-        y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
+        y = _draw_header_v2(
+            c,
+            ps,
+            logo_path=logo_path,
+            font_regular=font_regular,
+            font_bold=font_bold,
+        )
         y = y - CONTINUED_TOP_GAP
-        totals_page_cursor_after = _draw_totals_v2(c, ps, y_top=y, data=data, font_regular=font_regular, font_bold=font_bold)
 
-        y_section_top = totals_page_cursor_after - P2_TOP_BLANK
-        if not included_need_own_page and (y_section_top - included_h_est) >= CONTENT_BOTTOM:
+        y = _draw_totals_v2(
+            c,
+            ps,
+            y_top=y,
+            data=data,
+            font_regular=font_regular,
+            font_bold=font_bold,
+        )
+
+        if not included_need_own_page:
+            y_section_top = y - P2_TOP_BLANK
             _draw_included_exclusions_section_v2(
                 c,
                 ps,
@@ -961,25 +1007,32 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
             )
 
         _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
-        c.showPage()
-        page_no += 1
 
-    # ---- Included/Exclusions page ----
+        if included_need_own_page:
+            c.showPage()
+            page_no += 1
+
+    # ---- Included / exclusions page (if needed) ----
     if included_need_own_page:
-        y = _draw_header_v2(c, ps, logo_path=logo_path, font_regular=font_regular, font_bold=font_bold)
+        y = _draw_header_v2(
+            c,
+            ps,
+            logo_path=logo_path,
+            font_regular=font_regular,
+            font_bold=font_bold,
+        )
         y = y - CONTINUED_TOP_GAP
-        y2 = y - P2_TOP_BLANK
+        y = y - P2_TOP_BLANK
+
         _draw_included_exclusions_section_v2(
             c,
             ps,
-            y_top=y2,
+            y_top=y,
             font_regular=font_regular,
             data=data,
         )
 
         _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
-        c.showPage()
-        page_no += 1
 
     c.save()
     buf.seek(0)

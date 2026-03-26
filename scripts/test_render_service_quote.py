@@ -24,7 +24,7 @@ def _guess_template_path() -> Path:
 
 def _guess_original_path() -> Path:
     preferred = [
-        Path("sample_inputs/SERVICE_QUOTE_1036.pdf"),
+        Path("sample_inputs/SERVICE_QUOTE_1084-2.pdf"),
         Path("sample_inputs/Quote_1017_Cindy_Annual_Inspection.pdf"),
     ]
     for p in preferred:
@@ -149,19 +149,6 @@ def _print_fields_from_annots(pdf_path: Path) -> None:
             print(f"{name:16} : {values[name]}")
 
 
-def _force_multiline_quote_description() -> str:
-    """
-    Use real newline characters so renderer can prove it preserves them.
-    Also make each line long enough to wrap if needed.
-    """
-    return (
-        "Annual inspection and testing of fire alarm, emergency lighting, and related life safety devices as required by applicable standards.\n"
-        "Any deficiencies found during inspection will be documented in the report and quoted separately if repairs are required.\n"
-        "Pricing includes labour, standard testing procedures, and submission of inspection documentation upon completion.\n"
-        "Access to all required areas must be available at time of service to avoid delays or additional charges."
-    )
-
-
 def _patch_basic_fields(data) -> None:
     if not (data.client_name or "").strip():
         data.client_name = "Client Name"
@@ -202,6 +189,16 @@ def _print_exclusions(title: str, exclusions: list[str]) -> None:
         print(f"  {i}. {ex}")
 
 
+def _print_quote_description(title: str, text: str) -> None:
+    print(f"\n--- {title} ---")
+    if not (text or "").strip():
+        print("(empty)")
+        return
+
+    for i, ln in enumerate(text.splitlines(), start=1):
+        print(f"  line {i}: {ln}")
+
+
 def _render_case(template_path: Path, data, out_path: Path, label: str) -> None:
     out_bytes = render_service_quote(template_path, data)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,9 +217,7 @@ def _render_case(template_path: Path, data, out_path: Path, label: str) -> None:
     print("quote_number     :", data.quote_number)
     print("quote_date       :", data.quote_date)
 
-    print("quote_description:")
-    for i, ln in enumerate((data.quote_description or "").split("\n"), start=1):
-        print(f"  line {i}: {ln}")
+    _print_quote_description("quote_description passed into renderer", data.quote_description or "")
 
     print("subtotal         :", data.subtotal)
     print("tax              :", data.tax)
@@ -261,14 +256,15 @@ def main() -> None:
     print("tax              :", parsed_data.tax)
     print("total            :", parsed_data.total)
 
+    _print_quote_description("parsed quote_description", parsed_data.quote_description or "")
     _print_exclusions("parsed specific_exclusions", parsed_data.specific_exclusions or [])
 
     # ----------------------------
     # CASE 1: Render with parsed exclusions
+    # Uses the quote description parsed from sample input
     # ----------------------------
     data_parsed = deepcopy(parsed_data)
     _patch_basic_fields(data_parsed)
-    data_parsed.quote_description = _force_multiline_quote_description()
 
     out_path_1 = Path("tmp/service_quote_draft_with_parsed_exclusions.pdf")
     _render_case(
@@ -280,10 +276,11 @@ def main() -> None:
 
     # ----------------------------
     # CASE 2: Render with fallback exclusions
+    # Uses the same parsed quote description from sample input
+    # Only exclusions are changed
     # ----------------------------
     data_fallback = deepcopy(parsed_data)
     _patch_basic_fields(data_fallback)
-    data_fallback.quote_description = _force_multiline_quote_description()
     data_fallback.specific_exclusions = []
 
     out_path_2 = Path("tmp/service_quote_draft_with_fallback_exclusions.pdf")
@@ -299,6 +296,7 @@ def main() -> None:
     print("  1.", out_path_1.resolve())
     print("  2.", out_path_2.resolve())
     print("\nExpected result:")
+    print("  - both files should use the quote description parsed from the sample input")
     print("  - file 1 should show parsed exclusions from the source PDF")
     print("  - file 2 should show the 2 hardcoded fallback exclusions")
 
