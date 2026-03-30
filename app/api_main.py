@@ -399,6 +399,8 @@ def finalize_document(
 
         original_key = rowd["original_s3_key"]
         draft_key = rowd["styled_draft_s3_key"]
+        old_final_key = rowd.get("final_s3_key")
+
         if not original_key:
             raise HTTPException(status_code=400, detail="Document missing original_s3_key")
 
@@ -419,10 +421,13 @@ def finalize_document(
         )
         db.commit()
 
+        uploaded_new_final = False
+
         try:
             src_bytes = storage.download_bytes(source_key)
             final_bytes = stamp_pdf(src_bytes, stamp_text)
             storage.upload_pdf_bytes(final_key_path, final_bytes)
+            uploaded_new_final = True
 
             db.execute(
                 text(
@@ -439,9 +444,23 @@ def finalize_document(
             )
             db.commit()
 
+            if old_final_key and old_final_key != final_key_path:
+                try:
+                    storage.delete_object(old_final_key)
+                except Exception:
+                    pass
+
             return {"ok": True, "final_s3_key": final_key_path, "source_used": source_key}
 
         except Exception as e:
+            db.rollback()
+
+            if uploaded_new_final:
+                try:
+                    storage.delete_object(final_key_path)
+                except Exception:
+                    pass
+
             db.execute(
                 text(
                     """
@@ -454,7 +473,6 @@ def finalize_document(
             )
             db.commit()
             raise
-
 
 @app.post("/api/documents/{doc_id}/restyle")
 def restyle_document(doc_id: str):
@@ -583,7 +601,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT id, doc_type, status, original_s3_key FROM public.documents WHERE id=:id"),
+            text("SELECT id, doc_type, status, original_s3_key, final_s3_key FROM public.documents WHERE id=:id"),
             {"id": doc_id},
         ).mappings().first()
 
@@ -601,6 +619,7 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
         target_doc_id = str(doc_id)
         original_key = rowd["original_s3_key"]
+        old_final_key = rowd.get("final_s3_key")
         if not original_key:
             raise HTTPException(status_code=400, detail="Missing original_s3_key")
 
@@ -615,6 +634,8 @@ def save_final(doc_id: str, body: dict = Body(...)):
             {"id": target_doc_id},
         )
         db.commit()
+
+        fk = None
 
         try:
             set_final(db, target_doc_id, fields)
@@ -680,6 +701,12 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
             db.commit()
 
+            if old_final_key and old_final_key != fk:
+                try:
+                    storage.delete_object(old_final_key)
+                except Exception:
+                    pass
+
             return {
                 "ok": True,
                 "doc_id": target_doc_id,
@@ -690,6 +717,13 @@ def save_final(doc_id: str, body: dict = Body(...)):
 
         except Exception as e:
             db.rollback()
+
+            if fk:
+                try:
+                    storage.delete_object(fk)
+                except Exception:
+                    pass
+
             db.execute(
                 text(
                     """
@@ -702,7 +736,6 @@ def save_final(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
             raise
-
 
 class SendEmailIn(BaseModel):
     client_email: Optional[EmailStr] = None

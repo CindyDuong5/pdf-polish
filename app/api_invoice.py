@@ -76,9 +76,7 @@ def _invoice_total_amount(fields: dict) -> float:
 
 
 def _styled_draft_key_for(doc_id: str) -> str:
-    d = datetime.now(timezone.utc).date().isoformat()
-    return f"styled_draft/invoices/{d}/{doc_id}.pdf"
-
+    return f"styled_draft/invoices/{doc_id}.pdf"
 
 def _final_key_for(doc_id: str) -> str:
     now = datetime.now(timezone.utc)
@@ -339,12 +337,19 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     fields = body.get("fields")
     if not isinstance(fields, dict):
         raise HTTPException(status_code=400, detail="Missing fields")
+
     fields["hide_labor"] = bool(fields.get("hide_labor", False))
     fields["hide_parts"] = bool(fields.get("hide_parts", False))
 
     with SessionLocal() as db:
         doc = db.execute(
-            text("SELECT id, doc_type, customer_email, status FROM public.documents WHERE id=:id"),
+            text(
+                """
+                SELECT id, doc_type, customer_email, status, final_s3_key
+                FROM public.documents
+                WHERE id = :id
+                """
+            ),
             {"id": doc_id},
         ).mappings().first()
 
@@ -364,6 +369,8 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
                 detail="This invoice has been replaced by a newer version.",
             )
 
+        old_final_key = doc.get("final_s3_key")
+
     storage = get_storage()
     logo_path = os.getenv("MAINLINE_LOGO_PATH") or os.getenv("INVOICE_LOGO_PATH")
     final_bytes = render_invoice_styled_draft(fields, logo_path=logo_path)
@@ -375,36 +382,53 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     bill_name = (fields.get("billClient_name") or "").strip() or None
     prop_addr = _property_address_text(fields)
 
-    with SessionLocal() as db:
-        db.execute(
-            text(
-                """
-                UPDATE public.documents
-                SET
-                    final_s3_key = :k,
-                    status = 'FINALIZED',
-                    customer_email = COALESCE(:email, customer_email),
-                    customer_name = COALESCE(:name, customer_name),
-                    property_address = COALESCE(:addr, property_address),
-                    user_overrides = CAST(:fields AS jsonb),
-                    updated_at = now(),
-                    error = null
-                WHERE id = :id
-                """
-            ),
-            {
-                "id": doc_id,
-                "k": fk,
-                "email": bill_email,
-                "name": bill_name,
-                "addr": prop_addr,
-                "fields": json.dumps(fields),
-            },
-        )
-        db.commit()
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET
+                        final_s3_key = :k,
+                        status = 'FINALIZED',
+                        customer_email = COALESCE(:email, customer_email),
+                        customer_name = COALESCE(:name, customer_name),
+                        property_address = COALESCE(:addr, property_address),
+                        user_overrides = CAST(:fields AS jsonb),
+                        updated_at = now(),
+                        error = null
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": doc_id,
+                    "k": fk,
+                    "email": bill_email,
+                    "name": bill_name,
+                    "addr": prop_addr,
+                    "fields": json.dumps(fields),
+                },
+            )
+            db.commit()
+    except Exception:
+        # rollback storage upload if DB update fails
+        try:
+            storage.delete_object(fk)
+        except Exception:
+            pass
+        raise
 
-    return {"ok": True, "final_s3_key": fk, "payment_url": fields.get("payment_url")}
+    if old_final_key and old_final_key != fk:
+        try:
+            storage.delete_object(old_final_key)
+        except Exception:
+            pass
 
+    return {
+        "ok": True,
+        "final_s3_key": fk,
+        "payment_url": fields.get("payment_url"),
+    }
 
 @router.post("/api/documents/{doc_id}/invoice/send")
 def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):

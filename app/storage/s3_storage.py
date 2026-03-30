@@ -1,5 +1,4 @@
 # app/storage/s3_storage.py
-# app/storage/s3_storage.py
 from __future__ import annotations
 
 import os
@@ -69,6 +68,14 @@ class S3Storage:
     def download_bytes(self, key: str) -> bytes:
         resp = self.s3.get_object(Bucket=self.bucket, Key=key)
         return resp["Body"].read()
+
+    def delete_object(self, key: str) -> None:
+        if not key:
+            return
+        self.s3.delete_object(Bucket=self.bucket, Key=key)
+
+    def head_object(self, key: str) -> dict:
+        return self.s3.head_object(Bucket=self.bucket, Key=key)
 
     def presign_get_url(
         self,
