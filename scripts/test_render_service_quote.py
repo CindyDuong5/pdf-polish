@@ -1,9 +1,10 @@
 # scripts/test_render_service_quote.py
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Dict, Optional
+import re
 from copy import deepcopy
+from pathlib import Path
+from typing import Dict, Optional, List, Tuple
 
 from pypdf import PdfReader
 
@@ -175,7 +176,7 @@ def _patch_basic_fields(data) -> None:
         data.quote_number = "SQ-TEST-1001"
 
     if not (data.quote_date or "").strip():
-        data.quote_date = "Mar 09, 2026"
+        data.quote_date = "Mar 30, 2026"
 
 
 def _print_exclusions(title: str, exclusions: list[str]) -> None:
@@ -197,6 +198,157 @@ def _print_quote_description(title: str, text: str) -> None:
 
     for i, ln in enumerate(text.splitlines(), start=1):
         print(f"  line {i}: {ln}")
+
+
+def _make_short_scope() -> str:
+    return (
+        "Scope of Work\n"
+        "Annual fire alarm inspection.\n"
+        "Annual emergency light inspection.\n"
+        "Update logbook and submit report."
+    )
+
+
+def _make_long_scope() -> str:
+    return "\n".join(
+        [
+            "Scope of Work",
+            "a) Fire Alarm System",
+            "• Monthly: Inspection of control panel, alarms, strobes, annunciators, supervisory points, and trouble signals.",
+            "• Quarterly: Functional test of smoke detectors, heat detectors, duct detectors, pull stations, relays, monitor modules, and signal circuits.",
+            "• Annual: Full system inspection, sensitivity review where applicable, sequence verification, battery test, and final certification.",
+            "b) Sprinkler & Standpipe Systems",
+            "• Monthly: Inspect valves, gauges, tamper switches, risers, leaks, signage, and obstructions.",
+            "• Quarterly: Test waterflow switches, inspect hose cabinets, confirm accessibility, and review impairments.",
+            "• Annual: Main drain test, trip testing where applicable, inspection of risers, valves, heads, FDCs, and standpipe accessories.",
+            "c) Emergency Lighting & Exit Signs",
+            "• Monthly: Functional testing of all battery units, remote heads, and exit signs.",
+            "• Quarterly: Inspection of charging indicators, battery condition, lamp heads, and mounting condition.",
+            "• Annual: Full discharge test, deficiency logging, and replacement recommendations for failed components.",
+            "d) Portable Fire Extinguishers",
+            "• Monthly: Visual inspection, pressure check, seal check, accessibility, and signage review.",
+            "• Annual: Maintenance, tagging, and hydrostatic testing recommendations as required by code and manufacturer standards.",
+            "e) Reporting & Recordkeeping",
+            "• Maintain all inspection records.",
+            "• Update the on-site fire safety logbook.",
+            "• Submit a written report to the client representative within five business days.",
+            "• Where deficiencies are identified, provide a supplementary report with recommendations and estimated pricing.",
+        ]
+    )
+
+
+def _make_wrap_scope() -> str:
+    return "\n".join(
+        [
+            "Scope of Work",
+            "This line is intentionally very long to test whether normal paragraph wrapping behaves properly when a sentence keeps going across the page width without overlapping anything or getting cut off unexpectedly in the output PDF.",
+            "This line contains long technical naming: FAACP-SUBBASEMENT-NORTH-TOWER-ANNUNCIATOR-EXPANSION-MODULE-REVISION-BETA-2026-CLIENT-REFERENCE-DO-NOT-TRUNCATE.",
+            "This line contains a very long email and URL style string to test difficult wrapping behavior:",
+            "firealarmservicedepartment.superlongalias.testing@mainlinefireprotection-example-domain.ca / https://mainlinefireprotection-example-domain.ca/service/very/long/path/for/testing/wrapping/behavior/in-renderer/output",
+            "This line contains repeated code-like text:",
+            "DEVICECODE_1234567890_1234567890_1234567890_1234567890_1234567890_1234567890",
+            "Final note: the renderer should wrap cleanly and should not let text cross into the price area or outside the page margin.",
+        ]
+    )
+
+
+def _make_long_exclusions() -> List[str]:
+    return [
+        "Job to be completed during regular hours 08:00-16:30 Monday to Friday unless otherwise approved in writing by the Client.",
+        "Pricing is subject to parts availability, site access, shutdown coordination, and all quoted work being completed during the same scheduled attendance.",
+        "Any concealed wiring issues, inaccessible devices, ceiling access equipment, tenant coordination, security escort requirements, or after-hours building premiums are excluded unless specifically stated otherwise.",
+        "Deficiency repairs, replacement parts, re-inspection after third-party work, fire watch, engineering review, permit revisions, and monitoring provider charges are excluded from this quotation unless noted in the included scope.",
+    ]
+
+
+def _clone_item(item, *, name: Optional[str] = None, description: Optional[str] = None, price=None):
+    copied = deepcopy(item)
+    if name is not None:
+        copied.name = name
+    if description is not None:
+        copied.description = description
+    if price is not None:
+        copied.price = price
+    return copied
+
+
+def _build_wrap_heavy_items(parsed_data) -> list:
+    source_items = deepcopy(parsed_data.items or [])
+
+    if not source_items:
+        return []
+
+    first = source_items[0]
+    items = []
+
+    items.append(
+        _clone_item(
+            first,
+            name="Annual Fire Inspection Maintenance Contract - Very Long Item Title To Confirm Header Alignment And Text Behavior",
+            description="\n".join(
+                [
+                    "Annual Fire Inspection (Fire Alarm, Standpipe, Emergency Lights, Fire Extinguishers, Fire Pump, Kitchen Suppression, Monitoring Interface, and Ancillary Devices).",
+                    "This description line is intentionally long to make sure regular sentence wrapping still looks clean when the text width gets close to the margin and continues to another line.",
+                    "FACP-NORTH-TOWER-LEVEL-P2-ANNUNCIATOR-EXPANSION-CIRCUIT-LOOP-CHECK-REFERENCE-12345678901234567890.",
+                    "superlongpartsalias@mainlinefireprotection-example-domain.ca",
+                    "DEVICECODE_ABCDEFGHIJKLMNOPQRSTUVWXYZ_1234567890_ABCDEFGHIJKLMNOPQRSTUVWXYZ_1234567890",
+                ]
+            ),
+            price=5610.00,
+        )
+    )
+
+    for i in range(2, 11):
+        items.append(
+            _clone_item(
+                first,
+                name=f"Service Line {i}",
+                description="\n".join(
+                    [
+                        f"Inspection item {i} with enough text to wrap across multiple lines for layout testing.",
+                        "Verify devices, record results, update logbook, and provide deficiency notes where applicable.",
+                    ]
+                ),
+                price=0.00,
+            )
+        )
+
+    return items
+
+
+def _extract_footer_labels(pdf_path: Path) -> Tuple[int, List[str]]:
+    reader = PdfReader(str(pdf_path))
+    page_count = len(reader.pages)
+
+    labels: List[str] = []
+    pat = re.compile(r"Page\s+\d+\s+of\s+\d+", re.IGNORECASE)
+
+    for idx, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        matches = pat.findall(text)
+        if matches:
+            labels.append(matches[-1])
+        else:
+            labels.append(f"(missing on page {idx})")
+
+    return page_count, labels
+
+
+def _check_footer_totals(pdf_path: Path) -> bool:
+    page_count, labels = _extract_footer_labels(pdf_path)
+
+    print("\n--- Footer page check ---")
+    print("actual page count:", page_count)
+
+    ok = True
+    for idx, label in enumerate(labels, start=1):
+        expected = f"Page {idx} of {page_count}"
+        good = label == expected
+        if not good:
+            ok = False
+        print(f"  page {idx}: found={label!r} expected={expected!r} -> {'OK' if good else 'MISMATCH'}")
+
+    return ok
 
 
 def _render_case(template_path: Path, data, out_path: Path, label: str) -> None:
@@ -226,6 +378,8 @@ def _render_case(template_path: Path, data, out_path: Path, label: str) -> None:
     _print_exclusions("specific_exclusions passed into renderer", data.specific_exclusions or [])
 
     _print_fields_from_annots(out_path)
+    footer_ok = _check_footer_totals(out_path)
+    print("\nfooter check     :", "PASS" if footer_ok else "FAIL")
 
 
 def main() -> None:
@@ -259,46 +413,123 @@ def main() -> None:
     _print_quote_description("parsed quote_description", parsed_data.quote_description or "")
     _print_exclusions("parsed specific_exclusions", parsed_data.specific_exclusions or [])
 
-    # ----------------------------
-    # CASE 1: Render with parsed exclusions
-    # Uses the quote description parsed from sample input
-    # ----------------------------
+    cases = []
+
+    # CASE 1: Parsed data as-is
     data_parsed = deepcopy(parsed_data)
     _patch_basic_fields(data_parsed)
-
-    out_path_1 = Path("tmp/service_quote_draft_with_parsed_exclusions.pdf")
-    _render_case(
-        template_path=template_path,
-        data=data_parsed,
-        out_path=out_path_1,
-        label="Draft with parsed exclusions",
+    cases.append(
+        (
+            "parsed_exclusions",
+            "Draft with parsed exclusions",
+            data_parsed,
+            Path("tmp/service_quote_case_1_parsed_exclusions.pdf"),
+        )
     )
 
-    # ----------------------------
-    # CASE 2: Render with fallback exclusions
-    # Uses the same parsed quote description from sample input
-    # Only exclusions are changed
-    # ----------------------------
+    # CASE 2: Fallback exclusions
     data_fallback = deepcopy(parsed_data)
     _patch_basic_fields(data_fallback)
     data_fallback.specific_exclusions = []
-
-    out_path_2 = Path("tmp/service_quote_draft_with_fallback_exclusions.pdf")
-    _render_case(
-        template_path=template_path,
-        data=data_fallback,
-        out_path=out_path_2,
-        label="Draft with fallback exclusions",
+    cases.append(
+        (
+            "fallback_exclusions",
+            "Draft with fallback exclusions",
+            data_fallback,
+            Path("tmp/service_quote_case_2_fallback_exclusions.pdf"),
+        )
     )
+
+    # CASE 3: Short scope
+    data_short_scope = deepcopy(parsed_data)
+    _patch_basic_fields(data_short_scope)
+    data_short_scope.quote_description = _make_short_scope()
+    cases.append(
+        (
+            "short_scope",
+            "Draft with short scope of work",
+            data_short_scope,
+            Path("tmp/service_quote_case_3_short_scope.pdf"),
+        )
+    )
+
+    # CASE 4: Long scope
+    data_long_scope = deepcopy(parsed_data)
+    _patch_basic_fields(data_long_scope)
+    data_long_scope.quote_description = _make_long_scope()
+    cases.append(
+        (
+            "long_scope",
+            "Draft with long scope of work",
+            data_long_scope,
+            Path("tmp/service_quote_case_4_long_scope.pdf"),
+        )
+    )
+
+    # CASE 5: Long scope + long exclusions
+    data_long_scope_long_ex = deepcopy(parsed_data)
+    _patch_basic_fields(data_long_scope_long_ex)
+    data_long_scope_long_ex.quote_description = _make_long_scope()
+    data_long_scope_long_ex.specific_exclusions = _make_long_exclusions()
+    cases.append(
+        (
+            "long_scope_long_exclusions",
+            "Draft with long scope and long exclusions",
+            data_long_scope_long_ex,
+            Path("tmp/service_quote_case_5_long_scope_long_exclusions.pdf"),
+        )
+    )
+
+    # CASE 6: Wrap stress test in scope
+    data_wrap_scope = deepcopy(parsed_data)
+    _patch_basic_fields(data_wrap_scope)
+    data_wrap_scope.quote_description = _make_wrap_scope()
+    cases.append(
+        (
+            "wrap_scope",
+            "Draft with wrap stress test in scope",
+            data_wrap_scope,
+            Path("tmp/service_quote_case_6_wrap_scope.pdf"),
+        )
+    )
+
+    # CASE 7: Wrap stress test in items
+    data_wrap_items = deepcopy(parsed_data)
+    _patch_basic_fields(data_wrap_items)
+    data_wrap_items.quote_description = _make_short_scope()
+    data_wrap_items.items = _build_wrap_heavy_items(parsed_data)
+    data_wrap_items.specific_exclusions = _make_long_exclusions()
+    cases.append(
+        (
+            "wrap_items",
+            "Draft with wrap stress test in item descriptions",
+            data_wrap_items,
+            Path("tmp/service_quote_case_7_wrap_items.pdf"),
+        )
+    )
+
+    print("\n===== RENDER CASES =====")
+    for key, label, data, out_path in cases:
+        print(f"\n==================== {key} ====================")
+        _render_case(
+            template_path=template_path,
+            data=data,
+            out_path=out_path,
+            label=label,
+        )
 
     print("\n===== DONE =====")
     print("Check these files visually:")
-    print("  1.", out_path_1.resolve())
-    print("  2.", out_path_2.resolve())
-    print("\nExpected result:")
-    print("  - both files should use the quote description parsed from the sample input")
-    print("  - file 1 should show parsed exclusions from the source PDF")
-    print("  - file 2 should show the 2 hardcoded fallback exclusions")
+    for _, label, _, out_path in cases:
+        print(f"  - {label}: {out_path.resolve()}")
+
+    print("\nWhat to verify:")
+    print("  - footer total matches actual page count on every page")
+    print("  - short scope does not create awkward gaps")
+    print("  - long scope paginates cleanly")
+    print("  - long exclusions move to a new page only when needed")
+    print("  - very long text wraps cleanly and does not overlap price or margins")
+    print("  - long item descriptions stay inside the content width")
 
 
 if __name__ == "__main__":

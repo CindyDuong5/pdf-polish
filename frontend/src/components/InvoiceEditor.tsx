@@ -1,3 +1,4 @@
+// frontend/src/components/InvoiceEditor.tsx
 import React, { useMemo } from "react";
 import { recomputeInvoiceTotals } from "../panels/invoice/totals";
 
@@ -40,8 +41,13 @@ export type InvoiceFields = {
   authorized_by?: string;
   nte?: string;
 
+  invoice_summary?: string;
+
   labor_rows?: LaborRow[];
   parts_rows?: PartRow[];
+
+  hide_labor?: boolean;
+  hide_parts?: boolean;
 
   discount?: string;
   service_fee?: string;
@@ -285,166 +291,222 @@ export default function InvoiceEditor(props: {
         />
       </div>
 
-      <div style={{ fontWeight: 900, marginTop: 8, marginBottom: 6 }}>Labor</div>
-      <div className="mutedSmall" style={{ marginBottom: 8 }}>
-        Amount auto-calculates: hours × rate
-      </div>
-
-      <div className="invTableHeader">
-        <div>Date</div>
-        <div>Item Name</div>
-        <div>Description</div>
-        <div>Qty</div>
-        <div>Unit Price</div>
-        <div>Taxable</div>
-        <div style={{ textAlign: "right" }}>Amount</div>
-        <div />
-      </div>
-
-      {(props.value.labor_rows || []).map((r, i) => {
-        const qty = num(r.hours);
-        const unitPrice = num(r.rate);
-        const amount = m(r.price);
-
-        return (
-          <div key={i} className="invTableRow">
-            <input
-              className="input"
-              type="date"
-              value={toInputDate(r.date)}
-              onChange={(e) => setLabor(i, { date: fromInputDate(e.target.value) })}
-            />
-            <input
-              className="input"
-              placeholder="Item name"
-              value={r.name || ""}
-              onChange={(e) => setLabor(i, { name: e.target.value })}
-            />
-            <input
-              className="input"
-              placeholder="Item description"
-              value={r.description || ""}
-              onChange={(e) => setLabor(i, { description: e.target.value })}
-            />
-            <input
-              className="input"
-              type="number"
-              placeholder="Qty"
-              value={String(qty)}
-              onChange={(e) => setLabor(i, { hours: parseFloat(e.target.value || "0") })}
-            />
-            <input
-              className="input"
-              type="number"
-              placeholder="Unit Price"
-              value={String(unitPrice)}
-              onChange={(e) => setLabor(i, { rate: parseFloat(e.target.value || "0") })}
-            />
-            <label className="invChk">
-              <input
-                type="checkbox"
-                checked={!!r.taxable}
-                onChange={(e) => setLabor(i, { taxable: e.target.checked })}
-              />
-              <span>Tax</span>
-            </label>
-            <div className="invAmount">{amountCell(amount)}</div>
-            <button className="btn btnGhost" onClick={() => removeLabor(i)}>
-              Remove
-            </button>
-          </div>
-        );
-      })}
-
-      <div style={{ marginTop: 8 }}>
-        <button className="btn btnSecondary" onClick={addLabor}>
-          + Add labor line
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: 8,
+          marginBottom: 6,
+        }}
+      >
+        <div style={{ fontWeight: 900 }}>Labor</div>
+        <button
+          type="button"
+          className="btn"
+          style={{
+            background: props.value.hide_labor ? "#fff3e0" : "#ff9800",
+            color: props.value.hide_labor ? "#c66900" : "#fff",
+            border: "1px solid #ff9800",
+            fontWeight: 700,
+          }}
+          onClick={() => set("hide_labor", !props.value.hide_labor)}
+        >
+          {props.value.hide_labor ? "Show" : "Hide"}
         </button>
       </div>
 
-      <div style={{ fontWeight: 900, marginTop: 14, marginBottom: 6 }}>Parts & Materials</div>
-      <div className="mutedSmall" style={{ marginBottom: 8 }}>
-        Amount auto-calculates: qty × unit price
-      </div>
+      {!props.value.hide_labor && (
+        <>
+          <div className="mutedSmall" style={{ marginBottom: 8 }}>
+            Amount auto-calculates: hours × rate
+          </div>
 
-      <div className="invTableHeader">
-        <div>Date</div>
-        <div>Item Name</div>
-        <div>Item Code</div>
-        <div>Description</div>
-        <div>Qty</div>
-        <div>Unit Price</div>
-        <div>Taxable</div>
-        <div style={{ textAlign: "right" }}>Amount</div>
-        <div />
-      </div>
+          <div className="invTableHeader">
+            <div>Date</div>
+            <div>Item Name</div>
+            <div>Description</div>
+            <div>Qty</div>
+            <div>Unit Price</div>
+            <div>Taxable</div>
+            <div style={{ textAlign: "right" }}>Amount</div>
+            <div />
+          </div>
 
-      {(props.value.parts_rows || []).map((r, i) => {
-        const qty = num(r.qty);
-        const unitPrice = num(r.unit_price);
-        const amount = m(r.price);
+          {(props.value.labor_rows || []).map((r, i) => {
+            const qty = num(r.hours);
+            const unitPrice = num(r.rate);
+            const amount = m(r.price);
 
-        return (
-          <div key={i} className="invTableRow">
-            <input
-              className="input"
-              type="date"
-              value={toInputDate(r.date)}
-              onChange={(e) => setPart(i, { date: fromInputDate(e.target.value) })}
-            />
-            <input
-              className="input"
-              placeholder="Item name"
-              value={r.name || ""}
-              onChange={(e) => setPart(i, { name: e.target.value })}
-            />
-            <input
-              className="input"
-              placeholder="Item code"
-              value={r.code || ""}
-              onChange={(e) => setPart(i, { code: e.target.value })}
-            />
-            <input
-              className="input"
-              placeholder="Item description"
-              value={r.description || ""}
-              onChange={(e) => setPart(i, { description: e.target.value })}
-            />
-            <input
-              className="input"
-              type="number"
-              placeholder="Qty"
-              value={String(qty)}
-              onChange={(e) => setPart(i, { qty: parseFloat(e.target.value || "0") })}
-            />
-            <input
-              className="input"
-              type="number"
-              placeholder="Unit Price"
-              value={String(unitPrice)}
-              onChange={(e) => setPart(i, { unit_price: parseFloat(e.target.value || "0") })}
-            />
-            <label className="invChk">
-              <input
-                type="checkbox"
-                checked={!!r.taxable}
-                onChange={(e) => setPart(i, { taxable: e.target.checked })}
-              />
-              <span>Tax</span>
-            </label>
-            <div className="invAmount">{amountCell(amount)}</div>
-            <button className="btn btnGhost" onClick={() => removePart(i)}>
-              Remove
+            return (
+              <div key={i} className="invTableRow">
+                <input
+                  className="input"
+                  type="date"
+                  value={toInputDate(r.date)}
+                  onChange={(e) => setLabor(i, { date: fromInputDate(e.target.value) })}
+                />
+                <input
+                  className="input"
+                  placeholder="Item name"
+                  value={r.name || ""}
+                  onChange={(e) => setLabor(i, { name: e.target.value })}
+                />
+                <input
+                  className="input"
+                  placeholder="Item description"
+                  value={r.description || ""}
+                  onChange={(e) => setLabor(i, { description: e.target.value })}
+                />
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="Qty"
+                  value={String(qty)}
+                  onChange={(e) => setLabor(i, { hours: parseFloat(e.target.value || "0") })}
+                />
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="Unit Price"
+                  value={String(unitPrice)}
+                  onChange={(e) => setLabor(i, { rate: parseFloat(e.target.value || "0") })}
+                />
+                <label className="invChk">
+                  <input
+                    type="checkbox"
+                    checked={!!r.taxable}
+                    onChange={(e) => setLabor(i, { taxable: e.target.checked })}
+                  />
+                  <span>Tax</span>
+                </label>
+                <div className="invAmount">{amountCell(amount)}</div>
+                <button type="button" className="btn btnGhost" onClick={() => removeLabor(i)}>
+                  Remove
+                </button>
+              </div>
+            );
+          })}
+
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="btn btnSecondary" onClick={addLabor}>
+              + Add labor line
             </button>
           </div>
-        );
-      })}
+        </>
+      )}
 
-      <div style={{ marginTop: 8 }}>
-        <button className="btn btnSecondary" onClick={addPart}>
-          + Add part line
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: 14,
+          marginBottom: 6,
+        }}
+      >
+        <div style={{ fontWeight: 900 }}>Parts & Materials</div>
+        <button
+          type="button"
+          className="btn"
+          style={{
+            background: props.value.hide_parts ? "#fff3e0" : "#ff9800",
+            color: props.value.hide_parts ? "#c66900" : "#fff",
+            border: "1px solid #ff9800",
+            fontWeight: 700,
+          }}
+          onClick={() => set("hide_parts", !props.value.hide_parts)}
+        >
+          {props.value.hide_parts ? "Show" : "Hide"}
         </button>
       </div>
+
+      {!props.value.hide_parts && (
+        <>
+          <div className="mutedSmall" style={{ marginBottom: 8 }}>
+            Amount auto-calculates: qty × unit price
+          </div>
+
+          <div className="invTableHeader">
+            <div>Date</div>
+            <div>Item Name</div>
+            <div>Item Code</div>
+            <div>Description</div>
+            <div>Qty</div>
+            <div>Unit Price</div>
+            <div>Taxable</div>
+            <div style={{ textAlign: "right" }}>Amount</div>
+            <div />
+          </div>
+
+          {(props.value.parts_rows || []).map((r, i) => {
+            const qty = num(r.qty);
+            const unitPrice = num(r.unit_price);
+            const amount = m(r.price);
+
+            return (
+              <div key={i} className="invTableRow">
+                <input
+                  className="input"
+                  type="date"
+                  value={toInputDate(r.date)}
+                  onChange={(e) => setPart(i, { date: fromInputDate(e.target.value) })}
+                />
+                <input
+                  className="input"
+                  placeholder="Item name"
+                  value={r.name || ""}
+                  onChange={(e) => setPart(i, { name: e.target.value })}
+                />
+                <input
+                  className="input"
+                  placeholder="Item code"
+                  value={r.code || ""}
+                  onChange={(e) => setPart(i, { code: e.target.value })}
+                />
+                <input
+                  className="input"
+                  placeholder="Item description"
+                  value={r.description || ""}
+                  onChange={(e) => setPart(i, { description: e.target.value })}
+                />
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="Qty"
+                  value={String(qty)}
+                  onChange={(e) => setPart(i, { qty: parseFloat(e.target.value || "0") })}
+                />
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="Unit Price"
+                  value={String(unitPrice)}
+                  onChange={(e) => setPart(i, { unit_price: parseFloat(e.target.value || "0") })}
+                />
+                <label className="invChk">
+                  <input
+                    type="checkbox"
+                    checked={!!r.taxable}
+                    onChange={(e) => setPart(i, { taxable: e.target.checked })}
+                  />
+                  <span>Tax</span>
+                </label>
+                <div className="invAmount">{amountCell(amount)}</div>
+                <button type="button" className="btn btnGhost" onClick={() => removePart(i)}>
+                  Remove
+                </button>
+              </div>
+            );
+          })}
+
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="btn btnSecondary" onClick={addPart}>
+              + Add part line
+            </button>
+          </div>
+        </>
+      )}
 
       <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 10 }}>
         <div className="row gap8" style={{ marginBottom: 8 }}>

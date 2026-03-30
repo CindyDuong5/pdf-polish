@@ -1,6 +1,6 @@
 # app/styling/invoice/types.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 @dataclass
@@ -73,7 +73,8 @@ class InvoiceData:
 
   # ✅ NEW
   invoice_summary: str = ""
-
-  labor: List[LaborRow] = None
-  parts: List[PartRow] = None
-  totals: Totals = None
+  hide_labor: bool = False
+  hide_parts: bool = False
+  labor: List[LaborRow] = field(default_factory=list)
+  parts: List[PartRow] = field(default_factory=list)
+  totals: Optional[Totals] = None

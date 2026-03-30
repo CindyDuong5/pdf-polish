@@ -367,7 +367,9 @@ def map_buildops_invoice_to_pdf_data(
 
         # ✅ NEW
         "invoice_summary": invoice_summary,
-
+        "hide_labor": False,
+        "hide_parts": False,
+        
         # Tables
         "labor_rows": labor_rows,
         "parts_rows": parts_rows,

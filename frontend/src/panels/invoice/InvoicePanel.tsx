@@ -40,7 +40,11 @@ export default function InvoicePanel(props: {
   const [sendErr, setSendErr] = useState<string | null>(null);
 
   const draftUrl = props.links?.styled_draft?.url || null;
-  const finalUrl = props.links?.final?.url || null;
+
+  const finalBaseUrl = props.links?.final?.url || null;
+  const finalUrl = finalBaseUrl
+    ? `${finalBaseUrl}${finalBaseUrl.includes("?") ? "&" : "?"}v=${props.reloadKey}`
+    : null;
 
   function buildDefaultInvoiceSubject(next: InvoiceFields | null) {
     const invoiceNumber = String(

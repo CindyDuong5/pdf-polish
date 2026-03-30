@@ -79,7 +79,26 @@ def _money(v: Any) -> str:
         return f"${n:,.2f}"
     except Exception:
         return _s(v)
-    
+
+
+def _to_float(v: Any) -> float:
+    try:
+        if v is None or v == "":
+            return 0.0
+        return float(str(v).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return 0.0
+
+
+def _to_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    s = str(v).strip().lower()
+    return s in {"1", "true", "yes", "y", "on"}
+
+
 def _display_row_date(v: Any) -> str:
     s = _s(v).strip()
     if not s:
@@ -494,6 +513,12 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
     x1 = PAGE_W - M_R
     content_w = x1 - x0
 
+    # Respect UI hide flags for PDF section rendering only.
+    # Totals below still use normalized subtotal/tax/total values,
+    # so hiding a section does NOT change totals.
+    hide_labor = _to_bool(normalized.get("hide_labor"))
+    hide_parts = _to_bool(normalized.get("hide_parts"))
+
     # ===== Header =====
     y = _draw_header_v2_invoice(c, logo_path=logo_path)
     y -= 0.12 * inch
@@ -734,137 +759,160 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
             x += w
 
     # ===== Labor =====
-    _draw_text(c, x0, y, "Labor", fs=FS_SM, bold=True)
-    y -= 12
-    ensure_space(TABLE_HDR_H + 10)
-    draw_table_header(labor_cols, y, LABOR_TAIL_LABELS)
-    y -= TABLE_HDR_H
+    labor_rows = [] if hide_labor else (normalized.get("labor_rows") or [])
+    if labor_rows:
+        _draw_text(c, x0, y, "Labor", fs=FS_SM, bold=True)
+        y -= 12
+        ensure_space(TABLE_HDR_H + 10)
+        draw_table_header(labor_cols, y, LABOR_TAIL_LABELS)
+        y -= TABLE_HDR_H
 
-    labor_rows = normalized.get("labor_rows") or []
-    labor_total_hours = 0.0
-    labor_total_amt = 0.0
+        labor_total_hours = 0.0
+        labor_total_amt = 0.0
 
-    for r in labor_rows:
-        date_lines = _wrap_lines(_display_row_date(r.get("date")), "Helvetica", FS_XS, labor_cols[0][1] - 8)
-        name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, labor_cols[1][1] - 8)
-        desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, labor_cols[2][1] - 8)
+        for r in labor_rows:
+            date_lines = _wrap_lines(_display_row_date(r.get("date")), "Helvetica", FS_XS, labor_cols[0][1] - 8)
+            name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, labor_cols[1][1] - 8)
+            desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, labor_cols[2][1] - 8)
 
-        row_line_count = max(
-            len(date_lines),
-            len(name_lines),
-            len(desc_lines),
-            1,
-        )
-        row_h = _compute_row_h(row_line_count)
-        ensure_space(row_h + 8)
+            row_line_count = max(
+                len(date_lines),
+                len(name_lines),
+                len(desc_lines),
+                1,
+            )
+            row_h = _compute_row_h(row_line_count)
+            ensure_space(row_h + 8)
 
-        row_top = y
-        y_base = row_top - 11
+            row_top = y
+            y_base = row_top - 11
 
-        x = x0
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=date_lines); x += labor_cols[0][1]
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=name_lines); x += labor_cols[1][1]
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=desc_lines); x += labor_cols[2][1]
+            x = x0
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=date_lines)
+            x += labor_cols[0][1]
 
-        taxable = "Yes" if bool(r.get("taxable")) else "No"
-        _draw_center(c, x, labor_cols[3][1], y_base, taxable, fs=FS_XS); x += labor_cols[3][1]
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=name_lines)
+            x += labor_cols[1][1]
 
-        hours = float(r.get("hours") or 0)
-        rate = float(r.get("rate") or 0)
-        amount = float(r.get("price") or 0)
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=desc_lines)
+            x += labor_cols[2][1]
 
-        labor_total_hours += hours
-        labor_total_amt += amount
+            taxable = "Yes" if bool(r.get("taxable")) else "No"
+            _draw_center(c, x, labor_cols[3][1], y_base, taxable, fs=FS_XS)
+            x += labor_cols[3][1]
 
-        _draw_right(c, x + labor_cols[4][1] - 4, y_base, f"{hours:g}", fs=FS_XS); x += labor_cols[4][1]
-        _draw_right(c, x + labor_cols[5][1] - 4, y_base, _money(rate), fs=FS_XS); x += labor_cols[5][1]
-        _draw_right(c, x + labor_cols[6][1] - 4, y_base, _money(amount), fs=FS_XS)
+            hours = float(r.get("hours") or 0)
+            rate = float(r.get("rate") or 0)
+            amount = float(r.get("price") or 0)
 
-        _hr(c, x0, x1, y - row_h, lw=0.6, col=LIGHT_RULE)
-        y -= row_h
+            labor_total_hours += hours
+            labor_total_amt += amount
 
-    ensure_space(24)
-    _rect_fill(c, x0, y - 16, content_w, 16, GREY_TOTAL)
+            _draw_right(c, x + labor_cols[4][1] - 4, y_base, f"{hours:g}", fs=FS_XS)
+            x += labor_cols[4][1]
 
-    x_desc_end = x0 + sum(w for _, w in labor_cols[:3])
-    x_hours_end = x0 + sum(w for _, w in labor_cols[:5])
-    x_table_end = x0 + sum(w for _, w in labor_cols)
+            _draw_right(c, x + labor_cols[5][1] - 4, y_base, _money(rate), fs=FS_XS)
+            x += labor_cols[5][1]
 
-    y_mid = y - 12
-    _draw_right(c, x_desc_end - 6, y_mid, "Labor Total", fs=FS_XS, bold=True)
-    _draw_right(c, x_hours_end - 6, y_mid, f"{labor_total_hours:g}", fs=FS_XS, bold=True)
-    _draw_right(c, x_table_end - 4, y_mid, _money(labor_total_amt), fs=FS_XS, bold=True)
+            _draw_right(c, x + labor_cols[6][1] - 4, y_base, _money(amount), fs=FS_XS)
 
-    y -= 22
-    y -= 12
+            _hr(c, x0, x1, y - row_h, lw=0.6, col=LIGHT_RULE)
+            y -= row_h
+
+        ensure_space(24)
+        _rect_fill(c, x0, y - 16, content_w, 16, GREY_TOTAL)
+
+        x_desc_end = x0 + sum(w for _, w in labor_cols[:3])
+        x_hours_end = x0 + sum(w for _, w in labor_cols[:5])
+        x_table_end = x0 + sum(w for _, w in labor_cols)
+
+        y_mid = y - 12
+        _draw_right(c, x_desc_end - 6, y_mid, "Labor Total", fs=FS_XS, bold=True)
+        _draw_right(c, x_hours_end - 6, y_mid, f"{labor_total_hours:g}", fs=FS_XS, bold=True)
+        _draw_right(c, x_table_end - 4, y_mid, _money(labor_total_amt), fs=FS_XS, bold=True)
+
+        y -= 22
+        y -= 12
 
     # ===== Parts =====
-    _draw_text(c, x0, y, "Parts & Materials", fs=FS_SM, bold=True)
-    y -= 12
-    ensure_space(TABLE_HDR_H + 10)
-    draw_table_header(parts_cols, y, PARTS_TAIL_LABELS)
-    y -= TABLE_HDR_H
+    parts_rows = [] if hide_parts else (normalized.get("parts_rows") or [])
+    if parts_rows:
+        _draw_text(c, x0, y, "Parts & Materials", fs=FS_SM, bold=True)
+        y -= 12
+        ensure_space(TABLE_HDR_H + 10)
+        draw_table_header(parts_cols, y, PARTS_TAIL_LABELS)
+        y -= TABLE_HDR_H
 
-    parts_rows = normalized.get("parts_rows") or []
-    parts_total_qty = 0.0
-    parts_total_amt = 0.0
+        parts_total_qty = 0.0
+        parts_total_amt = 0.0
 
-    for r in parts_rows:
-        date_lines = _wrap_lines(_display_row_date(r.get("date")), "Helvetica", FS_XS, parts_cols[0][1] - 8)
-        name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, parts_cols[1][1] - 8)
-        code_lines = _wrap_lines(_s(r.get("code")), "Helvetica", FS_XS, parts_cols[2][1] - 8)
-        desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, parts_cols[3][1] - 8)
+        for r in parts_rows:
+            date_lines = _wrap_lines(_display_row_date(r.get("date")), "Helvetica", FS_XS, parts_cols[0][1] - 8)
+            name_lines = _wrap_lines(_s(r.get("name")), "Helvetica", FS_XS, parts_cols[1][1] - 8)
+            code_lines = _wrap_lines(_s(r.get("code")), "Helvetica", FS_XS, parts_cols[2][1] - 8)
+            desc_lines = _wrap_lines(_s(r.get("description")), "Helvetica", FS_XS, parts_cols[3][1] - 8)
 
-        row_line_count = max(
-            len(date_lines),
-            len(name_lines),
-            len(code_lines),
-            len(desc_lines),
-            1,
-        )
-        row_h = _compute_row_h(row_line_count)
-        ensure_space(row_h + 8)
+            row_line_count = max(
+                len(date_lines),
+                len(name_lines),
+                len(code_lines),
+                len(desc_lines),
+                1,
+            )
+            row_h = _compute_row_h(row_line_count)
+            ensure_space(row_h + 8)
 
-        row_top = y
-        y_base = row_top - 11
+            row_top = y
+            y_base = row_top - 11
 
-        x = x0
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=date_lines); x += parts_cols[0][1]
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=name_lines); x += parts_cols[1][1]
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=code_lines); x += parts_cols[2][1]
-        _draw_wrapped_cell_top(c, x, row_top=row_top, lines=desc_lines); x += parts_cols[3][1]
+            x = x0
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=date_lines)
+            x += parts_cols[0][1]
 
-        taxable = "Yes" if bool(r.get("taxable")) else "No"
-        _draw_center(c, x, parts_cols[4][1], y_base, taxable, fs=FS_XS); x += parts_cols[4][1]
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=name_lines)
+            x += parts_cols[1][1]
 
-        qty = float(r.get("qty") or 0)
-        unit_price = float(r.get("unit_price") or 0)
-        amount = float(r.get("price") or 0)
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=code_lines)
+            x += parts_cols[2][1]
 
-        parts_total_qty += qty
-        parts_total_amt += amount
+            _draw_wrapped_cell_top(c, x, row_top=row_top, lines=desc_lines)
+            x += parts_cols[3][1]
 
-        _draw_right(c, x + parts_cols[5][1] - 4, y_base, f"{qty:g}", fs=FS_XS); x += parts_cols[5][1]
-        _draw_right(c, x + parts_cols[6][1] - 4, y_base, _money(unit_price), fs=FS_XS); x += parts_cols[6][1]
-        _draw_right(c, x + parts_cols[7][1] - 4, y_base, _money(amount), fs=FS_XS)
+            taxable = "Yes" if bool(r.get("taxable")) else "No"
+            _draw_center(c, x, parts_cols[4][1], y_base, taxable, fs=FS_XS)
+            x += parts_cols[4][1]
 
-        _hr(c, x0, x1, y - row_h, lw=0.6, col=LIGHT_RULE)
-        y -= row_h
+            qty = float(r.get("qty") or 0)
+            unit_price = float(r.get("unit_price") or 0)
+            amount = float(r.get("price") or 0)
 
-    ensure_space(24)
-    _rect_fill(c, x0, y - 16, content_w, 16, GREY_TOTAL)
+            parts_total_qty += qty
+            parts_total_amt += amount
 
-    x_desc_end = x0 + sum(w for _, w in parts_cols[:4])
-    x_qty_end = x0 + sum(w for _, w in parts_cols[:6])
-    x_table_end = x0 + sum(w for _, w in parts_cols)
+            _draw_right(c, x + parts_cols[5][1] - 4, y_base, f"{qty:g}", fs=FS_XS)
+            x += parts_cols[5][1]
 
-    y_mid = y - 12
-    _draw_right(c, x_desc_end - 6, y_mid, "Parts & Materials Total", fs=FS_XS, bold=True)
-    _draw_right(c, x_qty_end - 6, y_mid, f"{parts_total_qty:g}", fs=FS_XS, bold=True)
-    _draw_right(c, x_table_end - 4, y_mid, _money(parts_total_amt), fs=FS_XS, bold=True)
+            _draw_right(c, x + parts_cols[6][1] - 4, y_base, _money(unit_price), fs=FS_XS)
+            x += parts_cols[6][1]
 
-    # space before totals block
-    y -= 28
+            _draw_right(c, x + parts_cols[7][1] - 4, y_base, _money(amount), fs=FS_XS)
+
+            _hr(c, x0, x1, y - row_h, lw=0.6, col=LIGHT_RULE)
+            y -= row_h
+
+        ensure_space(24)
+        _rect_fill(c, x0, y - 16, content_w, 16, GREY_TOTAL)
+
+        x_desc_end = x0 + sum(w for _, w in parts_cols[:4])
+        x_qty_end = x0 + sum(w for _, w in parts_cols[:6])
+        x_table_end = x0 + sum(w for _, w in parts_cols)
+
+        y_mid = y - 12
+        _draw_right(c, x_desc_end - 6, y_mid, "Parts & Materials Total", fs=FS_XS, bold=True)
+        _draw_right(c, x_qty_end - 6, y_mid, f"{parts_total_qty:g}", fs=FS_XS, bold=True)
+        _draw_right(c, x_table_end - 4, y_mid, _money(parts_total_amt), fs=FS_XS, bold=True)
+
+        y -= 28
 
     # ===== Totals block + Payment Options =====
     payment_title = "Payment Options:"
@@ -943,8 +991,34 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
             wrapped_payment_lines.append((line, fs_now))
 
     payment_h = len(wrapped_payment_lines) * payment_line_gap
-    approx_rows = 9
-    totals_h = (approx_rows * totals_row_h) + bar_h + 20
+
+    service_fee = _to_float(normalized.get("service_fee"))
+    discount = _to_float(normalized.get("discount"))
+
+    totals_rows: List[Tuple[str, str, bool, bool]] = []
+    totals_rows.append(("Subtotal", _money(normalized.get("subtotal")), False, False))
+
+    if service_fee != 0:
+        totals_rows.append(("Service Fee", _money(service_fee), False, True))
+
+    if discount != 0:
+        totals_rows.append(("Discount", _money(discount), False, True))
+
+    if service_fee != 0 or discount != 0:
+        totals_rows.append((
+            "Subtotal After Discount/Fees",
+            _money(normalized.get("subtotal_after_discount_fees")),
+            True,
+            True,
+        ))
+
+    totals_rows.extend([
+        ("Taxable Subtotal", _money(normalized.get("taxable_subtotal")), False, True),
+        ("Sales Tax Rate", _s(normalized.get("sales_tax_rate")), False, True),
+        ("Tax Amount", _money(normalized.get("tax_amount")), False, True),
+    ])
+
+    totals_h = (len(totals_rows) * totals_row_h) + bar_h + (2 * totals_row_h) + 20
     needed_h = max(payment_h, totals_h)
 
     if y - needed_h < (M_B + 0.35 * inch):
@@ -976,15 +1050,9 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
 
         y = bottom
 
-    totals_row("Subtotal", _money(normalized.get("subtotal")), top_rule=False)
-    totals_row("Service Fee", _money(normalized.get("service_fee")))
-    totals_row("Discount", _money(normalized.get("discount")))
-    totals_row("Subtotal After Discount/Fees", _money(normalized.get("subtotal_after_discount_fees")), bold=True)
-    totals_row("Taxable Subtotal", _money(normalized.get("taxable_subtotal")))
-    totals_row("Sales Tax Rate", _s(normalized.get("sales_tax_rate")))
-    totals_row("Tax Amount", _money(normalized.get("tax_amount")))
+    for label, value, bold, top_rule in totals_rows:
+        totals_row(label, value, bold=bold, top_rule=top_rule)
 
-    top = y
     bottom = y - bar_h
     _rect_fill(c, sx0, bottom, (sx1 - sx0), bar_h, ORANGE)
 

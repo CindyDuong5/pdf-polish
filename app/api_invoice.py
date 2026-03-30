@@ -81,8 +81,10 @@ def _styled_draft_key_for(doc_id: str) -> str:
 
 
 def _final_key_for(doc_id: str) -> str:
-    d = datetime.now(timezone.utc).date().isoformat()
-    return f"final/invoices/{d}/{doc_id}.pdf"
+    now = datetime.now(timezone.utc)
+    d = now.date().isoformat()
+    stamp = now.strftime("%Y%m%d%H%M%S")
+    return f"final/invoices/{d}/{doc_id}-{stamp}.pdf"
 
 
 def _property_address_text(fields: dict) -> str | None:
@@ -232,6 +234,8 @@ def build_invoice_from_number(body: BuildInvoiceIn):
 
     bo = BuildOpsClient()
     normalized = build_invoice_pdf_data_from_number(bo, inv_num)
+    normalized["hide_labor"] = bool(normalized.get("hide_labor", False))
+    normalized["hide_parts"] = bool(normalized.get("hide_parts", False))
 
     normalized_invoice_number = (normalized.get("invoice_number") or inv_num or "").strip()
     buildops_invoice_id = _safe_get_buildops_invoice_id(normalized)
@@ -335,6 +339,8 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     fields = body.get("fields")
     if not isinstance(fields, dict):
         raise HTTPException(status_code=400, detail="Missing fields")
+    fields["hide_labor"] = bool(fields.get("hide_labor", False))
+    fields["hide_parts"] = bool(fields.get("hide_parts", False))
 
     with SessionLocal() as db:
         doc = db.execute(

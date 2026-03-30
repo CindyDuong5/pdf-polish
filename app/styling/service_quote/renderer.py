@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfbase.pdfmetrics import stringWidth
@@ -169,10 +169,6 @@ def _wrap_text(text: str, font: str, size: int, max_w: float) -> List[str]:
 
 
 def _wrap_text_preserve_newlines(text: str, font: str, size: int, max_w: float) -> List[str]:
-    """
-    Wrap text but preserve explicit newline breaks from source text.
-    Blank lines are preserved as empty strings.
-    """
     text = (text or "").replace("\r", "\n")
     raw_lines = text.split("\n")
 
@@ -272,9 +268,6 @@ def _draw_header_v2(
     font_regular: str,
     font_bold: str,
 ) -> float:
-    """
-    Returns y just below underline (minus HEADER_BOTTOM_GAP).
-    """
     x0 = _x0()
     x1 = _x1(ps)
     w = x1 - x0
@@ -351,6 +344,47 @@ def _draw_footer_v2(
     c.drawCentredString(xc, FOOTER_Y, "Toronto’s Fire Protection Company")
     c.drawRightString(x1, FOOTER_Y, f"Page {page_no} of {total_pages}")
     c.setFillColor(colors.black)
+
+
+def _stamp_actual_page_numbers(
+    pdf_bytes: bytes,
+    template_pdf: Path,
+) -> bytes:
+    """
+    Re-stamp footer page numbers using the actual final page count.
+    This makes page numbering deterministic even if pagination produced
+    a different number of pages than estimated.
+    """
+    ps = _page_spec_from_template(template_pdf)
+    font_regular, _, _ = _register_brand_assets(template_pdf)
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    total_pages = len(reader.pages)
+
+    for idx, page in enumerate(reader.pages, start=1):
+        overlay_buf = io.BytesIO()
+        c = canvas.Canvas(overlay_buf, pagesize=(ps.w, ps.h))
+
+        x0 = _x0()
+        x1 = _x1(ps)
+
+        c.setFillColor(colors.white)
+        c.rect(x1 - 95, FOOTER_Y - 4, 95, 14, stroke=0, fill=1)
+
+        c.setFillColor(FOOTER_GRAY)
+        c.setFont(font_regular, FOOTER_FS)
+        c.drawRightString(x1, FOOTER_Y, f"Page {idx} of {total_pages}")
+        c.save()
+
+        overlay_buf.seek(0)
+        overlay_pdf = PdfReader(overlay_buf)
+        page.merge_page(overlay_pdf.pages[0])
+        writer.add_page(page)
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
 # =========================
@@ -578,9 +612,6 @@ def _draw_totals_v2(
     font_regular: str,
     font_bold: str,
 ) -> float:
-    """
-    Draw totals starting at y_top, returns y cursor AFTER totals.
-    """
     x0 = _x0()
     x1 = _x1(ps)
 
@@ -747,9 +778,6 @@ def _calc_header_bottom_y(ps: PageSpec) -> float:
 
 
 def _calc_first_page_items_y(ps: PageSpec, data: ServiceQuoteData, font_regular: str) -> float:
-    """
-    Compute y where items start on page 1 (after header + info + title + desc).
-    """
     x0 = _x0()
     x1 = _x1(ps)
     w = x1 - x0
@@ -757,7 +785,6 @@ def _calc_first_page_items_y(ps: PageSpec, data: ServiceQuoteData, font_regular:
 
     header_bottom = _calc_header_bottom_y(ps)
 
-    # info row
     y = header_bottom - INFO_TOP_GAP
     max_w = col_w - 6
 
@@ -787,7 +814,6 @@ def _calc_first_page_items_y(ps: PageSpec, data: ServiceQuoteData, font_regular:
     y_bottom = min(y1_end, y2_end, y3_end, y4_end) - 8
     y_after_info = y_bottom - INFO_TO_TITLE_GAP
 
-    # title + desc
     y_title_top = y_after_info
     y_after_title = y_title_top - TITLE_FS - TITLE_GAP_BELOW
 
@@ -806,11 +832,6 @@ def _paginate_item_blocks(
     continued_page_y_start: float,
     font_regular: str,
 ) -> Tuple[List[List[ItemBlock]], List[float]]:
-    """
-    Returns:
-      - pages: item blocks assigned to each page
-      - end_ys: y cursor after drawing all item blocks on each page
-    """
     pages: List[List[ItemBlock]] = []
     end_ys: List[float] = []
 
@@ -820,7 +841,6 @@ def _paginate_item_blocks(
     for b in blocks:
         need_h = _estimate_block_height(ps, b, font_regular)
 
-        # If the next block does not fit, move to a new page BEFORE adding it.
         if (y - need_h) < CONTENT_BOTTOM:
             if cur_page:
                 pages.append(cur_page)
@@ -849,7 +869,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     blocks = _build_item_blocks(data)
 
-    # ---- Pre-calc y starts ----
     first_items_y = _calc_first_page_items_y(ps, data, font_regular)
     continued_content_y = _calc_header_bottom_y(ps) - CONTINUED_TOP_GAP
 
@@ -864,7 +883,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
     last_items_end_y = item_end_ys[-1] if item_end_ys else first_items_y
     included_h_est = _estimate_included_exclusions_height(ps, font_regular, data)
 
-    # ---- Decide totals placement deterministically ----
     totals_need_own_page = (last_items_end_y - TOTALS_HEIGHT_EST) < CONTENT_BOTTOM
 
     if totals_need_own_page:
@@ -876,6 +894,7 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     included_need_own_page = (included_start_y - included_h_est) < CONTENT_BOTTOM
 
+    # keep this for flow control only; final footer count will be stamped afterward
     total_pages = (
         len(item_pages)
         + (1 if totals_need_own_page else 0)
@@ -887,7 +906,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     page_no = 1
 
-    # ---- Draw item pages ----
     for idx, page_blocks in enumerate(item_pages):
         y = _draw_header_v2(
             c,
@@ -920,7 +938,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
         cur_y = y
 
         for b in page_blocks:
-            # Safety check only. In normal flow, pre-pagination should already prevent overflow.
             need_h = _estimate_block_height(ps, b, font_regular)
             if (cur_y - need_h) < CONTENT_BOTTOM:
                 _draw_footer_v2(c, ps, page_no=page_no, total_pages=total_pages, font_regular=font_regular)
@@ -976,7 +993,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
             c.showPage()
             page_no += 1
 
-    # ---- Totals page (if needed) ----
     if totals_need_own_page:
         y = _draw_header_v2(
             c,
@@ -1012,7 +1028,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
             c.showPage()
             page_no += 1
 
-    # ---- Included / exclusions page (if needed) ----
     if included_need_own_page:
         y = _draw_header_v2(
             c,
@@ -1036,4 +1051,6 @@ def render_service_quote(template_pdf: Path, data: ServiceQuoteData) -> bytes:
 
     c.save()
     buf.seek(0)
-    return buf.getvalue()
+
+    raw_pdf = buf.getvalue()
+    return _stamp_actual_page_numbers(raw_pdf, template_pdf)
