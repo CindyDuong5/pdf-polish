@@ -7,8 +7,12 @@ function parseMoney(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 function money2(n: number): string {
-  return `$${(Math.round(n * 100) / 100).toFixed(2)}`;
+  return `$${round2(n).toFixed(2)}`;
 }
 
 function parsePercent(v: any): number {
@@ -26,37 +30,46 @@ function m(v: any): number {
  * tax is based on taxable labor + taxable parts + service fee - discount
  */
 export function recomputeInvoiceTotals(f: InvoiceFields): InvoiceFields {
-  const laborSubtotal = (f.labor_rows || []).reduce((sum, r) => sum + m(r.price), 0);
-  const partsSubtotal = (f.parts_rows || []).reduce((sum, r) => sum + m(r.price), 0);
-
-  const taxableLabor = (f.labor_rows || []).reduce(
-    (sum, r) => sum + (r.taxable ? m(r.price) : 0),
-    0
-  );
-  const taxableParts = (f.parts_rows || []).reduce(
-    (sum, r) => sum + (r.taxable ? m(r.price) : 0),
-    0
+  const laborSubtotal = round2(
+    (f.labor_rows || []).reduce((sum, r) => sum + m(r.price), 0)
   );
 
-  const subtotal = laborSubtotal + partsSubtotal;
+  const partsSubtotal = round2(
+    (f.parts_rows || []).reduce((sum, r) => sum + m(r.price), 0)
+  );
 
-  const discount = m(f.discount);      // expected positive, e.g. 50
-  const serviceFee = m(f.service_fee); // can be positive or negative
-  const after = subtotal + serviceFee - discount;
+  const taxableLabor = round2(
+    (f.labor_rows || []).reduce(
+      (sum, r) => sum + (r.taxable ? m(r.price) : 0),
+      0
+    )
+  );
+
+  const taxableParts = round2(
+    (f.parts_rows || []).reduce(
+      (sum, r) => sum + (r.taxable ? m(r.price) : 0),
+      0
+    )
+  );
+
+  const subtotal = round2(laborSubtotal + partsSubtotal);
+
+  const discount = round2(m(f.discount));      // expected positive
+  const serviceFee = round2(m(f.service_fee)); // can be positive or negative
+  const after = round2(subtotal + serviceFee - discount);
 
   const taxRate = parsePercent(f.sales_tax_rate) || 0.13;
 
-  // ✅ include fee + discount in taxable base
-  let taxableSubtotal = taxableLabor + taxableParts + serviceFee - discount;
-
-  // optional safety: don't allow negative taxable base
+  let taxableSubtotal = round2(taxableLabor + taxableParts + serviceFee - discount);
   if (taxableSubtotal < 0) taxableSubtotal = 0;
 
-  const tax = taxableSubtotal * taxRate;
-  const total = after + tax;
+  const tax = round2(taxableSubtotal * taxRate);
+  const total = round2(after + tax);
 
-  const paid = m(f.amount_paid);
-  const balance = total - paid;
+  const paid = round2(m(f.amount_paid));
+
+  let balance = round2(total - paid);
+  if (Math.abs(balance) < 0.005) balance = 0;
 
   return {
     ...f,
@@ -65,6 +78,7 @@ export function recomputeInvoiceTotals(f: InvoiceFields): InvoiceFields {
     subtotal_after_discount_fees: money2(after),
     tax_amount: money2(tax),
     total: money2(total),
+    amount_paid: money2(paid),
     balance: money2(balance),
   };
 }
