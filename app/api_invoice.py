@@ -806,16 +806,26 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
 @router.get("/debug/snowflake")
 def debug_snowflake():
-    try:
-        from app.services.snowflake import get_connection
+    import os
+    from app.services.snowflake import get_snowflake_connection
 
-        conn = get_connection()
+    key_path = os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH", "").strip()
+
+    try:
+        conn = get_snowflake_connection()
         cur = conn.cursor()
-        cur.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE()")
-        row = cur.fetchone()
+        try:
+            cur.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE()")
+            row = cur.fetchone()
+        finally:
+            cur.close()
+            conn.close()
 
         return {
             "ok": True,
+            "key_path": key_path,
+            "path_exists": os.path.exists(key_path) if key_path else False,
+            "is_file": os.path.isfile(key_path) if key_path else False,
             "user": row[0],
             "role": row[1],
             "warehouse": row[2],
@@ -823,5 +833,8 @@ def debug_snowflake():
     except Exception as e:
         return {
             "ok": False,
+            "key_path": key_path,
+            "path_exists": os.path.exists(key_path) if key_path else False,
+            "is_file": os.path.isfile(key_path) if key_path else False,
             "error": str(e),
         }
