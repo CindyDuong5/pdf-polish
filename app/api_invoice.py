@@ -803,3 +803,25 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         "recipient_source": fields.get("recipient_source"),
         "recipient_message": fields.get("recipient_message"),
     }
+
+@router.get("/debug/snowflake")
+def debug_snowflake():
+    try:
+        from app.services.snowflake import get_connection
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE()")
+        row = cur.fetchone()
+
+        return {
+            "ok": True,
+            "user": row[0],
+            "role": row[1],
+            "warehouse": row[2],
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+        }
