@@ -74,3 +74,9 @@ __pycache__/
 !templates/**/*.jpeg
 !templates/**/*.otf
 !templates/**/*.ttf
+
+rsa_key.p8
+rsa_key.pub
+*.pem
+*.p8
+*.key

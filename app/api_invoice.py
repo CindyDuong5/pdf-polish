@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import requests
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import uuid4
@@ -27,6 +26,7 @@ from app.services.additional_documents import (
     list_additional_documents,
     build_additional_email_attachments,
 )
+from app.services.snowflake import resolve_invoice_recipient_suggestion
 from app.styling.invoice.build_data import build_invoice_pdf_data_from_number
 from app.styling.invoice.renderer import render_invoice_styled_draft
 
@@ -48,6 +48,7 @@ class SendInvoiceEmailIn(BaseModel):
     bcc: Optional[List[str]] = None
 
     subject: Optional[str] = None
+
 
 class GetPaymentLinkIn(BaseModel):
     force_over_limit: bool = False
@@ -78,6 +79,7 @@ def _invoice_total_amount(fields: dict) -> float:
 def _styled_draft_key_for(doc_id: str) -> str:
     return f"styled_draft/invoices/{doc_id}.pdf"
 
+
 def _final_key_for(doc_id: str) -> str:
     now = datetime.now(timezone.utc)
     d = now.date().isoformat()
@@ -99,12 +101,185 @@ def _safe_get_buildops_invoice_id(fields: dict) -> str | None:
     return None
 
 
+def _safe_get_property_id(fields: dict) -> str | None:
+    for k in ("customerPropertyId", "property_id", "propertyId"):
+        v = fields.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _safe_get_customer_id(fields: dict) -> str | None:
+    for k in ("billingCustomerId", "billing_customer_id", "customer_id", "customerId"):
+        v = fields.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 def _best_fields(row: dict) -> dict:
     uo = row.get("user_overrides") or {}
     ex = row.get("extracted_fields") or {}
     if isinstance(uo, dict) and uo:
         return uo
     return ex if isinstance(ex, dict) else {}
+
+
+def _normalize_email(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _unique_emails(items: List[str] | None) -> List[str]:
+    out: List[str] = []
+    seen = set()
+
+    for raw in items or []:
+        email = _normalize_email(raw)
+        if not email:
+            continue
+        if email in seen:
+            continue
+        seen.add(email)
+        out.append(email)
+
+    return out
+
+
+def _get_invoice_recipient_resolution(fields: dict) -> dict:
+    property_id = _safe_get_property_id(fields)
+    customer_id = _safe_get_customer_id(fields)
+    fallback_email = _normalize_email(fields.get("billClient_email") or fields.get("client_email"))
+
+    try:
+        rec = resolve_invoice_recipient_suggestion(
+            property_id=property_id,
+            customer_id=customer_id,
+            primary_email=None,  # do not let Snowflake resolver auto-use bill client fallback
+        ) or {}
+
+        to_email = _normalize_email(rec.get("to"))
+        cc_emails = _unique_emails(rec.get("cc") or [])
+        all_emails = _unique_emails(rec.get("all_emails") or [])
+        items = rec.get("items") or []
+        source = (rec.get("source") or "").strip()
+        property_result = rec.get("property_result") or {}
+        customer_result = rec.get("customer_result") or {}
+
+        if to_email:
+            if source == "property":
+                message = "Recipient auto-selected from Snowflake Property contacts."
+            elif source == "customer":
+                message = "Recipient auto-selected from Snowflake Customer contacts."
+            else:
+                message = "Recipient auto-selected from Snowflake contacts."
+
+            return {
+                "property_id": property_id,
+                "customer_id": customer_id,
+                "to": to_email,
+                "cc": cc_emails,
+                "all_emails": _unique_emails([to_email, *cc_emails, *all_emails]),
+                "items": items,
+                "source": source or "property",
+                "message": message,
+                "property_result": property_result,
+                "customer_result": customer_result,
+            }
+
+        if fallback_email:
+            return {
+                "property_id": property_id,
+                "customer_id": customer_id,
+                "to": fallback_email,
+                "cc": [],
+                "all_emails": [fallback_email],
+                "items": [
+                    {
+                        "email": fallback_email,
+                        "full_name": fields.get("billClient_name") or "",
+                        "role": "bill_client_email",
+                        "source": "bill_client",
+                        "selected": True,
+                    }
+                ],
+                "source": "bill_client",
+                "message": "No Snowflake billing contact found. Using Bill Client Email as fallback.",
+                "property_result": property_result,
+                "customer_result": customer_result,
+            }
+
+        return {
+            "property_id": property_id,
+            "customer_id": customer_id,
+            "to": "",
+            "cc": [],
+            "all_emails": [],
+            "items": [],
+            "source": "manual",
+            "message": "No billing contact found in Snowflake and no Bill Client Email is available. Please manually enter the email address.",
+            "property_result": property_result,
+            "customer_result": customer_result,
+        }
+
+    except Exception:
+        if fallback_email:
+            return {
+                "property_id": property_id,
+                "customer_id": customer_id,
+                "to": fallback_email,
+                "cc": [],
+                "all_emails": [fallback_email],
+                "items": [
+                    {
+                        "email": fallback_email,
+                        "full_name": fields.get("billClient_name") or "",
+                        "role": "bill_client_email",
+                        "source": "bill_client",
+                        "selected": True,
+                    }
+                ],
+                "source": "bill_client",
+                "message": "Snowflake lookup failed. Using Bill Client Email as fallback.",
+                "property_result": {},
+                "customer_result": {},
+            }
+
+        return {
+            "property_id": property_id,
+            "customer_id": customer_id,
+            "to": "",
+            "cc": [],
+            "all_emails": [],
+            "items": [],
+            "source": "snowflake_error",
+            "message": "Unable to retrieve billing contacts from Snowflake. Please manually enter the email address to send the invoice to.",
+            "property_result": {},
+            "customer_result": {},
+        }
+
+
+def _apply_recipient_fields(fields: dict) -> dict:
+    rec = _get_invoice_recipient_resolution(fields)
+
+    fields["property_id"] = rec.get("property_id")
+    fields["customer_id"] = rec.get("customer_id")
+
+    fields["invoice_recipient_to"] = rec.get("to") or ""
+    fields["invoice_recipient_cc"] = rec.get("cc") or []
+    fields["invoice_recipient_all_emails"] = rec.get("all_emails") or []
+
+    # keep old keys too so existing frontend does not break
+    fields["property_rep_to"] = rec.get("to") or ""
+    fields["property_rep_cc"] = rec.get("cc") or []
+    fields["property_rep_all_emails"] = rec.get("all_emails") or []
+
+    fields["recipient_source"] = rec.get("source") or ""
+    fields["recipient_message"] = rec.get("message") or ""
+    fields["recipient_items"] = rec.get("items") or []
+    fields["property_recipient_result"] = rec.get("property_result") or {}
+    fields["customer_recipient_result"] = rec.get("customer_result") or {}
+
+    return rec
 
 
 def _find_existing_active_invoice(db, buildops_invoice_id: str | None, invoice_number: str | None):
@@ -235,6 +410,8 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     normalized["hide_labor"] = bool(normalized.get("hide_labor", False))
     normalized["hide_parts"] = bool(normalized.get("hide_parts", False))
 
+    recipient_info = _apply_recipient_fields(normalized)
+
     normalized_invoice_number = (normalized.get("invoice_number") or inv_num or "").strip()
     buildops_invoice_id = _safe_get_buildops_invoice_id(normalized)
 
@@ -247,7 +424,6 @@ def build_invoice_from_number(body: BuildInvoiceIn):
     draft_key = _styled_draft_key_for(doc_id)
     storage.upload_pdf_bytes(draft_key, pdf_bytes)
 
-    bill_email = (normalized.get("billClient_email") or normalized.get("client_email") or "").strip() or None
     bill_name = (normalized.get("billClient_name") or "").strip() or None
     prop_addr = _property_address_text(normalized)
 
@@ -290,7 +466,7 @@ def build_invoice_from_number(body: BuildInvoiceIn):
             {
                 "id": doc_id,
                 "customer_name": bill_name,
-                "customer_email": bill_email,
+                "customer_email": None,
                 "property_address": prop_addr,
                 "invoice_number": normalized_invoice_number,
                 "original_s3_key": draft_key,
@@ -329,6 +505,14 @@ def build_invoice_from_number(body: BuildInvoiceIn):
         "styled_draft_s3_key": draft_key,
         "url": url,
         "payment_url": normalized.get("payment_url"),
+        "property_id": normalized.get("property_id"),
+        "customer_id": normalized.get("customer_id"),
+        "invoice_recipient_to": normalized.get("invoice_recipient_to"),
+        "invoice_recipient_cc": normalized.get("invoice_recipient_cc") or [],
+        "property_rep_to": normalized.get("property_rep_to"),
+        "property_rep_cc": normalized.get("property_rep_cc") or [],
+        "recipient_source": normalized.get("recipient_source"),
+        "recipient_message": normalized.get("recipient_message"),
     }
 
 
@@ -340,6 +524,8 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
 
     fields["hide_labor"] = bool(fields.get("hide_labor", False))
     fields["hide_parts"] = bool(fields.get("hide_parts", False))
+
+    _apply_recipient_fields(fields)
 
     with SessionLocal() as db:
         doc = db.execute(
@@ -378,7 +564,6 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     fk = _final_key_for(doc_id)
     storage.upload_pdf_bytes(fk, final_bytes)
 
-    bill_email = (fields.get("billClient_email") or fields.get("client_email") or "").strip() or None
     bill_name = (fields.get("billClient_name") or "").strip() or None
     prop_addr = _property_address_text(fields)
 
@@ -391,7 +576,6 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
                     SET
                         final_s3_key = :k,
                         status = 'FINALIZED',
-                        customer_email = COALESCE(:email, customer_email),
                         customer_name = COALESCE(:name, customer_name),
                         property_address = COALESCE(:addr, property_address),
                         user_overrides = CAST(:fields AS jsonb),
@@ -403,7 +587,6 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
                 {
                     "id": doc_id,
                     "k": fk,
-                    "email": bill_email,
                     "name": bill_name,
                     "addr": prop_addr,
                     "fields": json.dumps(fields),
@@ -411,7 +594,6 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
             )
             db.commit()
     except Exception:
-        # rollback storage upload if DB update fails
         try:
             storage.delete_object(fk)
         except Exception:
@@ -428,7 +610,16 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
         "ok": True,
         "final_s3_key": fk,
         "payment_url": fields.get("payment_url"),
+        "property_id": fields.get("property_id"),
+        "customer_id": fields.get("customer_id"),
+        "invoice_recipient_to": fields.get("invoice_recipient_to"),
+        "invoice_recipient_cc": fields.get("invoice_recipient_cc") or [],
+        "property_rep_to": fields.get("property_rep_to"),
+        "property_rep_cc": fields.get("property_rep_cc") or [],
+        "recipient_source": fields.get("recipient_source"),
+        "recipient_message": fields.get("recipient_message"),
     }
+
 
 @router.post("/api/documents/{doc_id}/invoice/send")
 def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
@@ -452,6 +643,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             )
 
         fields = _best_fields(row)
+        recipient_info = _apply_recipient_fields(fields)
 
         final_key = row.get("final_s3_key")
         if not final_key:
@@ -465,23 +657,34 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         property_address = row.get("property_address") or _property_address_text(fields)
         payment_url = fields.get("payment_url")
 
-        to_email = (
-            (body.to_email or body.to)
-            or row.get("customer_email")
-            or fields.get("billClient_email")
-            or ""
-        ).strip()
+        default_to = _normalize_email(
+            fields.get("invoice_recipient_to")
+            or fields.get("property_rep_to")
+            or recipient_info.get("to")
+        )
+
+        to_email = _normalize_email((body.to_email or body.to) or default_to)
         if not to_email:
             raise HTTPException(
                 status_code=400,
-                detail="Missing to_email (and no customer_email on document)",
+                detail=fields.get("recipient_message")
+                or "No billing contact found under Property level or Customer level. Please manually enter the email address to send the invoice to.",
             )
 
-        cc = body.cc_emails or body.cc or []
-        cc = [e.strip() for e in cc if isinstance(e, str) and e.strip()]
+        default_cc = _unique_emails(
+            fields.get("invoice_recipient_cc")
+            or fields.get("property_rep_cc")
+            or recipient_info.get("cc")
+            or []
+        )
+
+        body_cc = body.cc_emails or body.cc or []
+        cc = _unique_emails(body_cc if body_cc else default_cc)
+        cc = [e for e in cc if e != to_email]
 
         bcc = body.bcc_emails or body.bcc or []
-        bcc = [e.strip() for e in bcc if isinstance(e, str) and e.strip()]
+        bcc = _unique_emails(bcc)
+        bcc = [e for e in bcc if e != to_email and e not in cc]
 
         view_url = storage.public_url(final_key)
 
@@ -495,8 +698,12 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
         additional_docs = list_additional_documents(db, doc_id)
         additional_attachments = build_additional_email_attachments(db, storage, doc_id)
-        additional_document_names = [str(x.get("display_name") or "").strip() for x in additional_docs if str(x.get("display_name") or "").strip()]
-        
+        additional_document_names = [
+            str(x.get("display_name") or "").strip()
+            for x in additional_docs
+            if str(x.get("display_name") or "").strip()
+        ]
+
         kind = email_kind_for("INVOICE")
         tpl = template_for_kind(kind)
 
@@ -549,8 +756,10 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 "support@mainlinefire.com",
             ),
         )
+
         sent_cc = ", ".join(cc) if cc else None
         sent_bcc = ", ".join(bcc) if bcc else None
+
         db.execute(
             text(
                 """
@@ -562,11 +771,18 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                     sent_at = now(),
                     updated_at = now(),
                     error = null,
-                    status = 'SENT'
+                    status = 'SENT',
+                    user_overrides = CAST(:fields AS jsonb)
                 WHERE id = :id
                 """
             ),
-            {"id": doc_id, "to_email": to_email, "sent_cc": sent_cc, "sent_bcc": sent_bcc},
+            {
+                "id": doc_id,
+                "to_email": to_email,
+                "sent_cc": sent_cc,
+                "sent_bcc": sent_bcc,
+                "fields": json.dumps(fields),
+            },
         )
         db.commit()
 
@@ -578,4 +794,12 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         "view_url": view_url,
         "payment_url": payment_url,
         "subject": subject,
+        "property_id": fields.get("property_id"),
+        "customer_id": fields.get("customer_id"),
+        "invoice_recipient_to": fields.get("invoice_recipient_to"),
+        "invoice_recipient_cc": fields.get("invoice_recipient_cc") or [],
+        "property_rep_to": fields.get("property_rep_to"),
+        "property_rep_cc": fields.get("property_rep_cc") or [],
+        "recipient_source": fields.get("recipient_source"),
+        "recipient_message": fields.get("recipient_message"),
     }

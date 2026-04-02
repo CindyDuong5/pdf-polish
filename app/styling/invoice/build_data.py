@@ -8,12 +8,6 @@ from app.styling.invoice.mapper import map_buildops_invoice_to_pdf_data
 
 
 def build_invoice_pdf_data_from_number(bo, invoice_number: str) -> Dict[str, Any]:
-    """
-    bo must expose:
-      - get_invoice_by_id(invoice_id)
-      - get_customer_by_id(customer_id)
-      - optionally get_property_by_id(property_id)
-    """
     invoice_id = get_invoice_id_by_number(invoice_number)
 
     invoice = bo.get_invoice_by_id(invoice_id)
@@ -32,9 +26,13 @@ def build_invoice_pdf_data_from_number(bo, invoice_number: str) -> Dict[str, Any
         invoice,
         customer=customer,
         property_obj=property_obj,
-)
+    )
 
-    # ✅ IMPORTANT: store BuildOps invoice id so we can request payment link later
+    # Make ids available downstream for recipient resolution
+    normalized["customerPropertyId"] = prop_id
+    normalized["billingCustomerId"] = billing_customer_id
+
+    # Existing BuildOps invoice metadata
     normalized["buildops_invoice_id"] = invoice_id
     normalized["buildops_invoice_number"] = str(invoice_number).strip()
 

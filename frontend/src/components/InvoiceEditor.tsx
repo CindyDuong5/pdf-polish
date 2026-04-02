@@ -63,6 +63,30 @@ export type InvoiceFields = {
   buildops_invoice_id?: string;
   buildops_invoice_number?: string;
   customerProvidedWONumber?: string;
+
+  customerPropertyId?: string;
+  billingCustomerId?: string;
+
+  property_id?: string;
+  customer_id?: string;
+
+  invoice_recipient_to?: string;
+  invoice_recipient_cc?: string[];
+  invoice_recipient_all_emails?: string[];
+
+  property_rep_to?: string;
+  property_rep_cc?: string[];
+  property_rep_all_emails?: string[];
+
+  customer_rep_to?: string;
+  customer_rep_cc?: string[];
+  customer_rep_all_emails?: string[];
+
+  recipient_source?: string;
+  recipient_message?: string;
+  payment_url?: string;
+
+  [key: string]: any;
 };
 
 function parseMoney(v: any): number {

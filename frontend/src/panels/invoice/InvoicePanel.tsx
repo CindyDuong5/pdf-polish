@@ -59,12 +59,21 @@ export default function InvoicePanel(props: {
       : "Invoice from Mainline Fire Protection";
   }
 
+  function getDefaultTo(next: InvoiceFields | null) {
+    return (next?.invoice_recipient_to || "").trim();
+  }
+
+  function getDefaultCc(next: InvoiceFields | null) {
+    return (next?.invoice_recipient_cc || []).join(", ");
+  }
+
   useEffect(() => {
     let alive = true;
 
     (async () => {
       try {
         setErr(null);
+        setMsg(null);
         setSendMsg(null);
         setSendErr(null);
 
@@ -73,13 +82,9 @@ export default function InvoicePanel(props: {
         if (!alive) return;
 
         setFields(next);
-
-        const defaultTo =
-          (next?.billClient_email || "").trim() ||
-          (props.selected?.customer_email || "").trim() ||
-          "";
-
-        setToInput(defaultTo);
+        setToInput(getDefaultTo(next));
+        setCcInput(getDefaultCc(next));
+        setBccInput("");
         setToDirty(false);
 
         setSubjectInput(buildDefaultInvoiceSubject(next));
@@ -99,20 +104,18 @@ export default function InvoicePanel(props: {
 
   useEffect(() => {
     if (toDirty) return;
-
-    const nextTo =
-      (fields?.billClient_email || "").trim() ||
-      (props.selected?.customer_email || "").trim() ||
-      "";
-
-    setToInput(nextTo);
-  }, [fields?.billClient_email, props.selected?.customer_email, toDirty]);
+    setToInput(getDefaultTo(fields));
+  }, [fields?.invoice_recipient_to, toDirty]);
 
   useEffect(() => {
     if (subjectDirty) return;
     setSubjectInput(buildDefaultInvoiceSubject(fields));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fields?.invoice_number, props.selected?.invoice_number, subjectDirty]);
+
+  useEffect(() => {
+    setCcInput(getDefaultCc(fields));
+  }, [fields?.invoice_recipient_cc, props.selectedId]);
 
   const paymentUrl = useMemo(() => {
     return (fields as any)?.payment_url || "";
@@ -147,7 +150,27 @@ export default function InvoicePanel(props: {
     setSavingFinal(true);
 
     try {
-      await saveFinalInvoice(props.selectedId, fields);
+      const res = await saveFinalInvoice(props.selectedId, fields);
+
+      setFields((prev) =>
+        prev
+          ? ({
+              ...prev,
+              invoice_recipient_to:
+                res?.invoice_recipient_to ?? prev.invoice_recipient_to,
+              invoice_recipient_cc:
+                res?.invoice_recipient_cc ?? prev.invoice_recipient_cc,
+              property_rep_to: res?.property_rep_to ?? prev.property_rep_to,
+              property_rep_cc: res?.property_rep_cc ?? prev.property_rep_cc,
+              recipient_source: res?.recipient_source ?? prev.recipient_source,
+              recipient_message: res?.recipient_message ?? prev.recipient_message,
+              payment_url: res?.payment_url ?? prev.payment_url,
+              property_id: res?.property_id ?? prev.property_id,
+              customer_id: res?.customer_id ?? prev.customer_id,
+            } as InvoiceFields)
+          : prev
+      );
+
       setMsg("Saved Final ✅");
 
       const updatedLinks = await waitForFinalPdf(props.selectedId);
@@ -170,7 +193,9 @@ export default function InvoicePanel(props: {
 
     if (total > 5000) {
       const ok = window.confirm(
-        `This invoice total is over $5,000 (${(fields as any)?.total || `$${total.toFixed(2)}`}).\n\nDo you still want to generate a payment link?`
+        `This invoice total is over $5,000 (${(fields as any)?.total || `$${total.toFixed(
+          2
+        )}`}).\n\nDo you still want to generate a payment link?`
       );
       if (!ok) return;
       force = true;
@@ -217,22 +242,88 @@ export default function InvoicePanel(props: {
       const cc = parseCc(ccInput);
       const bcc = parseCc(bccInput);
 
-      await sendInvoice(props.selectedId, {
+      const res = await sendInvoice(props.selectedId, {
         to,
         cc,
         bcc,
         subject: subjectInput.trim() || undefined,
       });
 
+      setFields((prev) =>
+        prev
+          ? ({
+              ...prev,
+              invoice_recipient_to:
+                res?.invoice_recipient_to ?? prev.invoice_recipient_to,
+              invoice_recipient_cc:
+                res?.invoice_recipient_cc ?? prev.invoice_recipient_cc,
+              property_rep_to: res?.property_rep_to ?? prev.property_rep_to,
+              property_rep_cc: res?.property_rep_cc ?? prev.property_rep_cc,
+              recipient_source: res?.recipient_source ?? prev.recipient_source,
+              recipient_message: res?.recipient_message ?? prev.recipient_message,
+            } as InvoiceFields)
+          : prev
+      );
+
+      setToInput(res?.to || to);
+      setCcInput((res?.cc || []).join(", "));
+      setBccInput((res?.bcc || []).join(", "));
+
       setSendMsg("Invoice email sent ✅");
-      setCcInput("");
-      setBccInput("");
     } catch (e: any) {
       setSendErr(friendlyErrorMessage(e));
     } finally {
       setSending(false);
     }
   }
+
+  function getRecipientSourceUi(source?: string | null) {
+    switch ((source || "").trim()) {
+      case "property":
+        return {
+          border: "1px solid #b7eb8f",
+          background: "#f6ffed",
+          titleColor: "#237804",
+          badgeBg: "#389e0d",
+          label: "PROPERTY (SNOWFLAKE)",
+        };
+      case "customer":
+        return {
+          border: "1px solid #ffe58f",
+          background: "#fffbe6",
+          titleColor: "#8a6d1d",
+          badgeBg: "#d48806",
+          label: "CUSTOMER (SNOWFLAKE)",
+        };
+      case "bill_client":
+        return {
+          border: "1px solid #91d5ff",
+          background: "#e6f7ff",
+          titleColor: "#0958d9",
+          badgeBg: "#1677ff",
+          label: "BILL CLIENT EMAIL",
+        };
+      case "snowflake_error":
+        return {
+          border: "1px solid #ffccc7",
+          background: "#fff2f0",
+          titleColor: "#cf1322",
+          badgeBg: "#cf1322",
+          label: "SNOWFLAKE ERROR",
+        };
+      case "manual":
+      default:
+        return {
+          border: "1px solid #f5c2c7",
+          background: "#fff1f0",
+          titleColor: "#a61d24",
+          badgeBg: "#cf1322",
+          label: "MANUAL",
+        };
+    }
+  }
+
+  const recipientUi = getRecipientSourceUi(fields?.recipient_source);
 
   return (
     <>
@@ -275,8 +366,77 @@ export default function InvoicePanel(props: {
             <div className="cardTitle">Send Invoice</div>
             <div className="mutedSmall">Email + payment link</div>
           </div>
-          
+
           <div style={{ padding: 12 }}>
+            {fields?.recipient_source ? (
+              <div
+                style={{
+                  marginBottom: 14,
+                  padding: "14px 16px",
+                  borderRadius: 10,
+                  border: recipientUi.border,
+                  background: recipientUi.background,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase",
+                    marginBottom: 8,
+                    color: recipientUi.titleColor,
+                  }}
+                >
+                  Recipient Source
+                </div>
+
+                <div
+                  style={{
+                    display: "inline-block",
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    marginBottom: 8,
+                    background: recipientUi.badgeBg,
+                    color: "#fff",
+                  }}
+                >
+                  {recipientUi.label}
+                </div>
+
+                {fields.recipient_message ? (
+                  <div
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1.45,
+                      fontWeight: 500,
+                      color: "#222",
+                      whiteSpace: "pre-line",
+                    }}
+                  >
+                    {fields.recipient_message}
+                  </div>
+                ) : null}
+
+                {fields.recipient_source === "bill_client" &&
+                (fields as any)?.billClient_email ? (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 13,
+                      color: "#0958d9",
+                      fontWeight: 600,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    Billing client email: {(fields as any).billClient_email}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <label style={{ display: "block", marginBottom: 10 }}>
               <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>To</div>
               <input
@@ -328,7 +488,9 @@ export default function InvoicePanel(props: {
             </label>
 
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Payment Link</div>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+                Payment Link
+              </div>
 
               <div className="row gap8" style={{ marginBottom: 8 }}>
                 <button
@@ -347,7 +509,10 @@ export default function InvoicePanel(props: {
               </div>
 
               {paymentUrl ? (
-                <div className="input" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  className="input"
+                  style={{ display: "flex", alignItems: "center", gap: 8 }}
+                >
                   <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
                     {paymentUrl}
                   </div>
@@ -359,7 +524,7 @@ export default function InvoicePanel(props: {
                 <div className="mutedSmall">No payment link available yet.</div>
               )}
             </div>
-            
+
             <AdditionalDocumentsPanel
               docId={props.selectedId}
               disabled={sending || savingFinal || props.loading || !props.selectedId}

@@ -6,27 +6,221 @@ const API_BASE =
 async function httpJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   const text = await res.text();
+
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {}
+
   if (!res.ok) {
     throw new Error(data?.detail || text || res.statusText);
   }
+
   return data;
 }
 
-export async function listDocuments(params: {
+export type ListDocumentsParams = {
   q?: string;
   doc_type?: string;
   status?: string;
   limit?: number;
-}) {
+};
+
+export type RestyleDocResponse = {
+  ok: boolean;
+  doc_id: string;
+  styled_draft_s3_key?: string | null;
+  reused_existing?: boolean;
+};
+
+export type GetFieldsResponse = {
+  doc_id: string;
+  draft?: any;
+  final?: any;
+  source?: string;
+  doc_type?: string;
+};
+
+export type SaveFinalResponse = {
+  ok: boolean;
+  doc_id: string;
+  final_s3_key?: string | null;
+  customer_email?: string | null;
+  reused_existing?: boolean;
+};
+
+export type SendEmailPayload = {
+  cc?: string[];
+  bcc?: string[];
+  client_email?: string;
+  deficiency_report_link?: string;
+  subject?: string;
+};
+
+export type SendEmailResponse = {
+  ok: boolean;
+  doc_id: string;
+  to: string;
+  cc: string[];
+  bcc: string[];
+  url: string;
+  sent_at?: string | null;
+  template: string;
+  reviewable: boolean;
+  payment_url?: string | null;
+  quote_number?: string | null;
+  subject?: string;
+};
+
+export type InvoiceRecipientSource =
+  | "property"
+  | "customer"
+  | "bill_client"
+  | "manual"
+  | "snowflake_error"
+  | string;
+
+export type InvoiceRecipientItem = {
+  email?: string;
+  full_name?: string;
+  role?: string;
+  source?: string;
+  selected?: boolean;
+  [key: string]: any;
+};
+
+export type BuildInvoiceResponse = {
+  ok: boolean;
+  doc_id: string;
+  invoice_number?: string | null;
+  styled_draft_s3_key?: string | null;
+  url?: string | null;
+  payment_url?: string | null;
+  property_id?: string | null;
+  customer_id?: string | null;
+  invoice_recipient_to?: string | null;
+  invoice_recipient_cc?: string[];
+  property_rep_to?: string | null;
+  property_rep_cc?: string[];
+  recipient_source?: InvoiceRecipientSource | null;
+  recipient_message?: string | null;
+};
+
+export type SaveFinalInvoiceResponse = {
+  ok: boolean;
+  final_s3_key?: string | null;
+  payment_url?: string | null;
+  property_id?: string | null;
+  customer_id?: string | null;
+  invoice_recipient_to?: string | null;
+  invoice_recipient_cc?: string[];
+  property_rep_to?: string | null;
+  property_rep_cc?: string[];
+  recipient_source?: InvoiceRecipientSource | null;
+  recipient_message?: string | null;
+};
+
+export type SendInvoicePayload = {
+  to?: string;
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+};
+
+export type SendInvoiceResponse = {
+  ok: boolean;
+  doc_id: string;
+  to: string;
+  cc: string[];
+  bcc: string[];
+  subject?: string | null;
+  sent_at?: string | null;
+  payment_url?: string | null;
+
+  property_id?: string | null;
+  customer_id?: string | null;
+
+  invoice_recipient_to?: string | null;
+  invoice_recipient_cc?: string[];
+  invoice_recipient_all_emails?: string[];
+
+  property_rep_to?: string | null;
+  property_rep_cc?: string[];
+  property_rep_all_emails?: string[];
+
+  recipient_source?: InvoiceRecipientSource | null;
+  recipient_message?: string | null;
+  recipient_items?: InvoiceRecipientItem[];
+
+  additional_document_names?: string[];
+};
+
+export type GetInvoicePaymentLinkPayload = {
+  force_over_limit?: boolean;
+};
+
+export type GetInvoicePaymentLinkResponse = {
+  ok?: boolean;
+  payment_url?: string | null;
+  [key: string]: any;
+};
+
+export type AcceptQuotePayload = {
+  token: string;
+  quote_po_number?: string | null;
+  quote_note?: string | null;
+};
+
+export type RejectQuotePayload = {
+  token: string;
+  reason?: string | null;
+};
+
+export type AdditionalDocumentItem = {
+  id: string;
+  document_id: string;
+  display_name: string;
+  source_type: "upload" | "url";
+  storage_key: string;
+  original_filename?: string | null;
+  content_type?: string | null;
+  file_size?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type ListAdditionalDocumentsResponse = {
+  items: AdditionalDocumentItem[];
+};
+
+export type UploadAdditionalDocumentResponse = {
+  ok: boolean;
+  item: AdditionalDocumentItem;
+};
+
+export type AddAdditionalDocumentByUrlPayload = {
+  file_url: string;
+  display_name: string;
+};
+
+export type DeleteAdditionalDocumentResponse = {
+  ok: boolean;
+};
+
+export type ListDocumentHistoryParams = {
+  limit?: number;
+  q?: string;
+};
+
+export async function listDocuments(params: ListDocumentsParams) {
   const usp = new URLSearchParams();
+
   if (params.q) usp.set("q", params.q);
   if (params.doc_type) usp.set("doc_type", params.doc_type);
   if (params.status) usp.set("status", params.status);
+
   usp.set("limit", String(params.limit ?? 50));
+
   return httpJson(`${API_BASE}/api/documents?${usp.toString()}`);
 }
 
@@ -34,33 +228,21 @@ export async function getLinks(docId: string) {
   return httpJson(`${API_BASE}/api/documents/${docId}/links`);
 }
 
-export async function restyleDoc(docId: string): Promise<{
-  ok: boolean;
-  doc_id: string;
-  styled_draft_s3_key?: string | null;
-  reused_existing?: boolean;
-}> {
-  return httpJson(`${API_BASE}/api/documents/${docId}/restyle`, { method: "POST" });
+export async function restyleDoc(docId: string): Promise<RestyleDocResponse> {
+  return httpJson(`${API_BASE}/api/documents/${docId}/restyle`, {
+    method: "POST",
+  });
 }
 
 // fields + final
-export async function getFields(docId: string): Promise<{
-  doc_id: string;
-  draft?: any;
-  final?: any;
-  source?: string;
-  doc_type?: string;
-}> {
+export async function getFields(docId: string): Promise<GetFieldsResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/fields`);
 }
 
-export async function saveFinal(docId: string, fields: any): Promise<{
-  ok: boolean;
-  doc_id: string;
-  final_s3_key?: string | null;
-  customer_email?: string | null;
-  reused_existing?: boolean;
-}> {
+export async function saveFinal(
+  docId: string,
+  fields: any
+): Promise<SaveFinalResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/save-final`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -71,27 +253,8 @@ export async function saveFinal(docId: string, fields: any): Promise<{
 // service quote email
 export async function sendEmail(
   docId: string,
-  payload: {
-    cc?: string[];
-    bcc?: string[];
-    client_email?: string;
-    deficiency_report_link?: string;
-    subject?: string;
-  }
-): Promise<{
-  ok: boolean;
-  doc_id: string;
-  to: string;
-  cc: string[];
-  bcc: string[];  
-  url: string;
-  sent_at?: string | null;
-  template: string;
-  reviewable: boolean;
-  payment_url?: string | null;
-  quote_number?: string | null;
-  subject?: string;
-}> {
+  payload: SendEmailPayload
+): Promise<SendEmailResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/send-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -101,8 +264,8 @@ export async function sendEmail(
 
 export async function sendInvoice(
   docId: string,
-  payload?: { to?: string; cc?: string[]; bcc?: string[]; subject?: string }
-) {
+  payload?: SendInvoicePayload
+): Promise<SendInvoiceResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/invoice/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -117,8 +280,8 @@ export async function lookupInvoiceByNumber(invoiceNumber: string) {
 
 export async function getInvoicePaymentLink(
   docId: string,
-  payload?: { force_over_limit?: boolean }
-) {
+  payload?: GetInvoicePaymentLinkPayload
+): Promise<GetInvoicePaymentLinkResponse> {
   return httpJson(`${API_BASE}/api/invoices/${docId}/payment-link`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -126,10 +289,7 @@ export async function getInvoicePaymentLink(
   });
 }
 
-export async function acceptQuote(
-  docId: string,
-  payload: { token: string; quote_po_number?: string | null; quote_note?: string | null }
-) {
+export async function acceptQuote(docId: string, payload: AcceptQuotePayload) {
   return httpJson(`${API_BASE}/api/documents/${docId}/accept`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -137,7 +297,7 @@ export async function acceptQuote(
   });
 }
 
-export async function rejectQuote(docId: string, payload: { token: string; reason?: string | null }) {
+export async function rejectQuote(docId: string, payload: RejectQuotePayload) {
   return httpJson(`${API_BASE}/api/documents/${docId}/reject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -150,7 +310,9 @@ export async function getQuoteDecision(docId: string, token: string) {
   return httpJson(`${API_BASE}/api/documents/${docId}/quote-decision?${qs}`);
 }
 
-export async function buildInvoiceByNumber(invoiceNumber: string) {
+export async function buildInvoiceByNumber(
+  invoiceNumber: string
+): Promise<BuildInvoiceResponse> {
   return httpJson(`${API_BASE}/api/invoices/build`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -158,7 +320,10 @@ export async function buildInvoiceByNumber(invoiceNumber: string) {
   });
 }
 
-export async function saveFinalInvoice(docId: string, fields: any) {
+export async function saveFinalInvoice(
+  docId: string,
+  fields: any
+): Promise<SaveFinalInvoiceResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/invoice/save-final`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -181,22 +346,9 @@ export function friendlyErrorMessage(e: any): string {
 }
 
 // Additional documents
-export type AdditionalDocumentItem = {
-  id: string;
-  document_id: string;
-  display_name: string;
-  source_type: "upload" | "url";
-  storage_key: string;
-  original_filename?: string | null;
-  content_type?: string | null;
-  file_size?: number | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
 export async function listAdditionalDocuments(
   docId: string
-): Promise<{ items: AdditionalDocumentItem[] }> {
+): Promise<ListAdditionalDocumentsResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/additional-documents`);
 }
 
@@ -204,17 +356,21 @@ export async function uploadAdditionalDocument(
   docId: string,
   file: File,
   displayName: string
-): Promise<{ ok: boolean; item: AdditionalDocumentItem }> {
+): Promise<UploadAdditionalDocumentResponse> {
   const form = new FormData();
   form.append("file", file);
   form.append("display_name", displayName);
 
-  const res = await fetch(`${API_BASE}/api/documents/${docId}/additional-documents/upload`, {
-    method: "POST",
-    body: form,
-  });
+  const res = await fetch(
+    `${API_BASE}/api/documents/${docId}/additional-documents/upload`,
+    {
+      method: "POST",
+      body: form,
+    }
+  );
 
   const text = await res.text();
+
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -229,8 +385,8 @@ export async function uploadAdditionalDocument(
 
 export async function addAdditionalDocumentByUrl(
   docId: string,
-  payload: { file_url: string; display_name: string }
-): Promise<{ ok: boolean; item: AdditionalDocumentItem }> {
+  payload: AddAdditionalDocumentByUrlPayload
+): Promise<UploadAdditionalDocumentResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/additional-documents/by-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -241,7 +397,7 @@ export async function addAdditionalDocumentByUrl(
 export async function deleteAdditionalDocument(
   docId: string,
   additionalDocId: string
-): Promise<{ ok: boolean }> {
+): Promise<DeleteAdditionalDocumentResponse> {
   return httpJson(
     `${API_BASE}/api/documents/${docId}/additional-documents/${additionalDocId}`,
     {
@@ -250,7 +406,7 @@ export async function deleteAdditionalDocument(
   );
 }
 
-export async function listDocumentHistory(params?: { limit?: number; q?: string }) {
+export async function listDocumentHistory(params?: ListDocumentHistoryParams) {
   const usp = new URLSearchParams();
   usp.set("limit", String(params?.limit ?? 300));
 
