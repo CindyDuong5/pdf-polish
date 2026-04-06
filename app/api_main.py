@@ -1082,7 +1082,7 @@ def _notify_support_approved(quote_number: str, po: str | None, note: str | None
     html_body = text_body.replace("\n", "<br>")
 
     send_email_brevo_smtp(
-        to_email="sarah@mainlinefire.com",
+        to_email="kristyn@mainlinefire.com",
         subject=subject,
         html_body=html_body,
         text_body=text_body,
@@ -1102,7 +1102,7 @@ def _notify_support_rejected(quote_number: str, reason: str | None):
     html_body = text_body.replace("\n", "<br>")
 
     send_email_brevo_smtp(
-        to_email="sarah@mainlinefire.com",
+        to_email="kristyn@mainlinefire.com",
         subject=subject,
         html_body=html_body,
         text_body=text_body,
