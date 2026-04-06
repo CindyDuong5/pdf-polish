@@ -1086,7 +1086,7 @@ def _notify_support_approved(quote_number: str, po: str | None, note: str | None
         subject=subject,
         html_body=html_body,
         text_body=text_body,
-        cc_emails=[],
+        cc_emails=["sarah@mainlinefire.com"],
         attachments=[],
     )
 
@@ -1106,7 +1106,7 @@ def _notify_support_rejected(quote_number: str, reason: str | None):
         subject=subject,
         html_body=html_body,
         text_body=text_body,
-        cc_emails=[],
+        cc_emails=["sarah@mainlinefire.com"],
         attachments=[],
     )
 
