@@ -500,6 +500,55 @@ def _stamp_footer(pdf_bytes: bytes) -> bytes:
     w.write(out)
     return out.getvalue()
 
+# ------------------- Make PAID stamp --------------------
+def _make_paid_overlay() -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+
+    # Center of page
+    cx = PAGE_W / 2
+    cy = PAGE_H / 2
+
+    c.saveState()
+
+    # Move to center and rotate
+    c.translate(cx, cy)
+    c.rotate(35)
+
+    # Use the same orange as Total
+    c.setFillColor(ORANGE)
+
+    # Make it watermark-like
+    try:
+        c.setFillAlpha(0.30)
+    except Exception:
+        # Some environments/reportlab builds may not support alpha.
+        # If so, it will still render in orange, just without transparency.
+        pass
+
+    # Slightly smaller and better centered visually
+    c.setFont("Helvetica-Bold", 96)
+    c.drawCentredString(0, -10, "PAID")
+
+    c.restoreState()
+    c.save()
+    return buf.getvalue()
+
+
+def _stamp_paid(pdf_bytes: bytes) -> bytes:
+    r = PdfReader(io.BytesIO(pdf_bytes))
+    w = PdfWriter()
+
+    overlay_pdf = PdfReader(io.BytesIO(_make_paid_overlay()))
+    overlay_page: PageObject = overlay_pdf.pages[0]
+
+    for page in r.pages:
+        page.merge_page(overlay_page)
+        w.add_page(page)
+
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
 
 # ---------------- Renderer ----------------
 def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | None = None) -> bytes:
@@ -1070,4 +1119,12 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
 
     c.save()
     pdf_no_footer = buf.getvalue()
-    return _stamp_footer(pdf_no_footer)
+    pdf_with_footer = _stamp_footer(pdf_no_footer)
+
+    balance = _to_float(normalized.get("balance"))
+
+    # Apply PAID stamp ONLY when fully paid
+    if abs(balance) < 0.01:
+        return _stamp_paid(pdf_with_footer)
+
+    return pdf_with_footer
