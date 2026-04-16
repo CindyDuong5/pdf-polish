@@ -204,6 +204,23 @@ def get_properties_for_customer(customer_id: str) -> List[Dict[str, Any]]:
     return [row for row in rows if row.get("property_id")]
 
 
+def get_property_details_for_customer(
+    customer_id: str,
+    property_id: str,
+) -> Optional[Dict[str, Any]]:
+    customer_id = (customer_id or "").strip()
+    property_id = (property_id or "").strip()
+
+    if not customer_id or not property_id:
+        return None
+
+    rows = get_properties_for_customer(customer_id)
+    for row in rows:
+        if str(row.get("property_id") or "").strip() == property_id:
+            return row
+
+    return None
+
 # =========================================================
 # Existing invoice recipient helpers
 # =========================================================

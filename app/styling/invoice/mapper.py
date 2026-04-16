@@ -41,11 +41,11 @@ def _fmt_date_from_epoch_seconds(v: Any) -> str:
         if TORONTO_TZ:
             dt = datetime.fromtimestamp(sec, tz=TORONTO_TZ)
         else:
-            # fallback: local time (shouldn't happen in your env)
             dt = datetime.fromtimestamp(sec)
         return dt.strftime("%b %d, %Y")
     except Exception:
         return ""
+
 
 def _iso_date_from_epoch_seconds(v: Any) -> str:
     if v is None or v == "":
@@ -59,7 +59,8 @@ def _iso_date_from_epoch_seconds(v: Any) -> str:
         return dt.strftime("%Y-%m-%d")
     except Exception:
         return ""
-    
+
+
 def _pick_invoice_address(invoice: Dict[str, Any], address_type: str) -> Optional[Dict[str, Any]]:
     for a in (invoice.get("addresses") or []):
         if (a or {}).get("addressType") == address_type:
@@ -69,7 +70,7 @@ def _pick_invoice_address(invoice: Dict[str, Any], address_type: str) -> Optiona
 
 def _pick_customer_address(customer: Dict[str, Any], address_type: str) -> Optional[Dict[str, Any]]:
     """
-    Customer payload shape you pasted:
+    Customer payload shape:
       customer["addresses"]["items"] = [ { addressType: "billingAddress", ... } ]
     """
     addr = customer.get("addresses") or {}
@@ -100,7 +101,6 @@ def _format_address_lines(a: Optional[Dict[str, Any]]) -> List[str]:
     if line2:
         lines.append(line2)
 
-        # "Toronto, ON M5T 1L9"
     city_line = ""
     if city and state:
         city_line = f"{city}, {state}"
@@ -112,7 +112,6 @@ def _format_address_lines(a: Optional[Dict[str, Any]]) -> List[str]:
     if zipcode:
         city_line = f"{city_line} {zipcode}".strip()
 
-    # ✅ if country exists, keep it on the same line (append at end)
     if country:
         country = str(country).strip()
         if country:
@@ -125,9 +124,6 @@ def _format_address_lines(a: Optional[Dict[str, Any]]) -> List[str]:
 
 
 def _extract_customer_phone_email(customer: Optional[Dict[str, Any]]) -> Tuple[str, str]:
-    """
-    Per your customer payload: phonePrimary + email
-    """
     if not customer:
         return "", ""
     phone = (customer.get("phonePrimary") or "").strip()
@@ -136,9 +132,6 @@ def _extract_customer_phone_email(customer: Optional[Dict[str, Any]]) -> Tuple[s
 
 
 def _extract_property_name_and_address(property_obj: Optional[Dict[str, Any]]) -> Tuple[str, List[str]]:
-    """
-    Property payload (per your sample) uses companyName for the display name.
-    """
     if not property_obj:
         return "", []
 
@@ -150,11 +143,9 @@ def _extract_property_name_and_address(property_obj: Optional[Dict[str, Any]]) -
         or ""
     )
 
-    # In your sample, property has "addresses": [ ... ]
     addr_obj = None
     addrs = property_obj.get("addresses")
     if isinstance(addrs, list) and addrs:
-        # Prefer propertyAddress if present, else first
         for a in addrs:
             if (a or {}).get("addressType") == "propertyAddress":
                 addr_obj = a
@@ -162,7 +153,6 @@ def _extract_property_name_and_address(property_obj: Optional[Dict[str, Any]]) -
         if not addr_obj:
             addr_obj = addrs[0]
 
-    # Some APIs return property_obj["address"] instead
     if not addr_obj and isinstance(property_obj.get("address"), dict):
         addr_obj = property_obj["address"]
 
@@ -170,14 +160,51 @@ def _extract_property_name_and_address(property_obj: Optional[Dict[str, Any]]) -
 
     return str(name or "").strip(), lines
 
+
+def _extract_snowflake_property_name_and_address(
+    snowflake_property: Optional[Dict[str, Any]],
+) -> Tuple[str, List[str]]:
+    if not snowflake_property:
+        return "", []
+
+    name = str(snowflake_property.get("property_name") or "").strip()
+
+    line1 = str(snowflake_property.get("property_address") or "").strip()
+    city = str(snowflake_property.get("property_city") or "").strip()
+    state = str(snowflake_property.get("property_state") or "").strip()
+    postal = str(snowflake_property.get("property_postal_code") or "").strip()
+    country = str(snowflake_property.get("property_country") or "").strip()
+
+    lines: List[str] = []
+    if line1:
+        lines.append(line1)
+
+    city_line = ""
+    if city and state:
+        city_line = f"{city}, {state}"
+    elif city:
+        city_line = city
+    elif state:
+        city_line = state
+
+    if postal:
+        city_line = f"{city_line} {postal}".strip()
+
+    if country:
+        city_line = f"{city_line} {country}".strip()
+
+    if city_line:
+        lines.append(city_line)
+
+    return name, lines
+
+
 def _normalize_summary(summary: Any) -> str:
-    """
-    Keep line breaks from BuildOps, but normalize whitespace safely.
-    """
     if summary is None:
         return ""
     s = str(summary).replace("\r\n", "\n").replace("\r", "\n").strip()
     return s
+
 
 def _extract_amount_paid(invoice: Dict[str, Any]) -> float:
     total = 0.0
@@ -188,7 +215,6 @@ def _extract_amount_paid(invoice: Dict[str, Any]) -> float:
         applied = p.get("appliedAmount")
         payment_amount = p.get("paymentAmount")
 
-        # Best source for invoice-specific paid amount
         if applied not in (None, ""):
             total += _to_float(applied)
         else:
@@ -196,25 +222,13 @@ def _extract_amount_paid(invoice: Dict[str, Any]) -> float:
 
     return total
 
+
 def map_buildops_invoice_to_pdf_data(
     invoice: Dict[str, Any],
     customer: Optional[Dict[str, Any]] = None,
     property_obj: Optional[Dict[str, Any]] = None,
+    snowflake_property: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    Normalize BuildOps invoice payload into a single dict for your invoice PDF renderer.
-
-    Rules you specified:
-      - Bill To name/address from addresses[billingAddress] (invoice preferred, else customer billingAddress)
-      - Bill phone/email from customer: email + phonePrimary
-      - Service Fee is sum(invoiceItems where lineItemType == "Fee")
-      - Discount is sum(invoiceItems where lineItemType == "Discount") (shown as positive; renderer can add '-' sign)
-      - Labor table: lineItemType == "LaborLineItem"
-      - Everything else (except Fee/Discount) -> Parts/Materials table
-      - Dates: issuedDate/dueDate epoch seconds -> formatted date
-      - Totals: use BuildOps invoice totals as source of truth (no recompute)
-    """
-
     # -------------------------
     # BILL TO (invoice address preferred; fallback to customer)
     # -------------------------
@@ -228,7 +242,11 @@ def map_buildops_invoice_to_pdf_data(
     bill_phone, bill_email = _extract_customer_phone_email(customer)
 
     # -------------------------
-    # PROPERTY (prefer property endpoint; else invoice propertyAddress)
+    # PROPERTY
+    # Priority:
+    # 1. BuildOps property endpoint
+    # 2. invoice propertyAddress
+    # 3. Snowflake fallback
     # -------------------------
     prop_name, prop_lines = _extract_property_name_and_address(property_obj)
 
@@ -236,9 +254,15 @@ def map_buildops_invoice_to_pdf_data(
     if not prop_lines:
         prop_lines = _format_address_lines(invoice_property_addr)
 
+    sf_prop_name, sf_prop_lines = _extract_snowflake_property_name_and_address(snowflake_property)
+
     if not prop_name:
-        # You can change this later once property endpoint is stable
-        # For now, best available display name:
+        prop_name = sf_prop_name
+
+    if not prop_lines:
+        prop_lines = sf_prop_lines
+
+    if not prop_name:
         prop_name = (invoice_property_addr or {}).get("addressLine1") or invoice.get("customerName") or ""
 
     # -------------------------
@@ -250,7 +274,13 @@ def map_buildops_invoice_to_pdf_data(
     due_date = _fmt_date_from_epoch_seconds(invoice.get("dueDate"))
     job_number = str(invoice.get("jobNumber") or "").strip()
 
-    customer_name = str(invoice.get("customerName") or bill_client_name or "").strip()
+    customer_name = str(
+        invoice.get("customerName")
+        or (snowflake_property or {}).get("customer_name")
+        or bill_client_name
+        or ""
+    ).strip()
+
     authorized_by = str(invoice.get("authorizedBy") or "").strip()
     po_number = str(invoice.get("customerProvidedPONumber") or "").strip()
     wo_number = str(invoice.get("customerProvidedWONumber") or "").strip()
@@ -258,11 +288,10 @@ def map_buildops_invoice_to_pdf_data(
     nte_val = _to_float(invoice.get("amountNotToExceed"))
     nte = _fmt_money(nte_val) if nte_val else ""
 
-    # ✅ NEW
     invoice_summary = _normalize_summary(invoice.get("summary"))
 
     # -------------------------
-    # ITEMS: labor / parts + adjustments
+    # ITEMS
     # -------------------------
     labor_rows: List[Dict[str, Any]] = []
     parts_rows: List[Dict[str, Any]] = []
@@ -281,8 +310,8 @@ def map_buildops_invoice_to_pdf_data(
         unit_price = _to_float(it.get("unitPrice"))
         taxable = bool(it.get("taxable"))
 
-        # You can switch this later to item audit date if needed.
-        line_date = issued_date_iso or issued_date
+        # Use line-specific date if available, otherwise leave blank
+        line_date = _iso_date_from_epoch_seconds(it.get("date")) or ""
 
         if t == "Fee":
             service_fee_total += amount
@@ -306,7 +335,6 @@ def map_buildops_invoice_to_pdf_data(
             )
             continue
 
-        # Default: treat as parts/materials/other line item
         product = it.get("product") or {}
         parts_rows.append(
             {
@@ -322,34 +350,30 @@ def map_buildops_invoice_to_pdf_data(
         )
 
     # -------------------------
-    # TOTALS (BuildOps is source of truth)
+    # TOTALS
     # -------------------------
     subtotal = _to_float(invoice.get("subtotal"))
     taxable_subtotal = _to_float(invoice.get("taxableSubtotal"))
     tax_amount = _to_float(invoice.get("taxAmount"))
     total_amount = _to_float(invoice.get("totalAmount"))
-    sales_tax_rate = _to_float(invoice.get("salesTaxRate"))  # typically "13"
+    sales_tax_rate = _to_float(invoice.get("salesTaxRate"))
 
-    # Prefer top-level discount if present, else use Discount line item total
     top_level_discount = _to_float(invoice.get("discount"))
     discount_for_pdf = top_level_discount if top_level_discount != 0 else discount_total
 
     subtotal_after_discount_fees = subtotal + service_fee_total - discount_for_pdf
 
-    # Payments
     amount_paid = _extract_amount_paid(invoice)
     balance = round(total_amount - amount_paid, 2)
     if abs(balance) < 0.005:
         balance = 0.0
 
     return {
-        # Bill To
         "billClient_name": bill_client_name,
         "billClient_address_lines": bill_client_address_lines,
         "billClient_phone": bill_phone,
         "billClient_email": bill_email,
 
-        # Invoice meta
         "invoice_number": invoice_number,
         "issued_date": issued_date,
         "issued_date_iso": issued_date_iso,
@@ -357,7 +381,6 @@ def map_buildops_invoice_to_pdf_data(
         "job_number": job_number,
         "po_number": po_number,
 
-        # Customer / Property block
         "customer_name": customer_name,
         "property_name": str(prop_name or "").strip(),
         "property_address_lines": prop_lines,
@@ -365,16 +388,13 @@ def map_buildops_invoice_to_pdf_data(
         "customerProvidedWONumber": wo_number,
         "nte": nte,
 
-        # ✅ NEW
         "invoice_summary": invoice_summary,
         "hide_labor": False,
         "hide_parts": False,
-        
-        # Tables
+
         "labor_rows": labor_rows,
         "parts_rows": parts_rows,
 
-        # Totals (strings ready to print)
         "subtotal": _fmt_money(subtotal),
         "service_fee": _fmt_money(service_fee_total),
         "discount": _fmt_money(discount_for_pdf),
