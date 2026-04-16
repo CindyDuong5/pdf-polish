@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,14 +30,18 @@ from app.services.additional_documents import (
     build_additional_email_attachments,
 )
 
+from app.api_proposal import _normalize_proposal_fields
+from app.services.proposal_service import build_proposal_document
 from app.storage.s3_storage import get_storage
 from app.styling.service_quote.renderer import render_service_quote
 from app.api_invoice import router as invoice_router
+from app.api_proposal import router as proposal_router
 from app.services.payment_link import get_invoice_payment_link
 
 app = FastAPI(title="PDF Polish API")
 
 app.include_router(invoice_router)
+app.include_router(proposal_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -589,7 +594,150 @@ def get_document_fields(doc_id: str):
 
         raise HTTPException(status_code=404, detail="No fields available")
 
+@app.post("/api/documents/{doc_id}/proposal/save-final")
+def save_final_proposal(doc_id: str, body: dict = Body(...)):
+    fields = body.get("fields")
+    if not isinstance(fields, dict):
+        raise HTTPException(status_code=400, detail="Missing fields")
 
+    fields = _normalize_proposal_fields(fields)
+
+    # Make sure proposal-specific display fields are explicitly preserved
+    # for later email rendering and downstream reuse.
+    customer_name_text = str(fields.get("customer_name") or "").strip()
+    customer_address_text = str(fields.get("customer_address") or "").strip()
+    property_address_text = str(fields.get("property_address") or "").strip()
+
+    if customer_name_text:
+        fields["company_name"] = customer_name_text
+        fields["client_name"] = customer_name_text
+
+    if customer_address_text:
+        fields["customer_address"] = customer_address_text
+
+    if property_address_text:
+        fields["property_address"] = property_address_text
+
+    with SessionLocal() as db:
+        row = db.execute(
+            text(
+                """
+                SELECT id, doc_type, status, final_s3_key
+                FROM public.documents
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        rowd = dict(row)
+        _block_replaced_document(rowd)
+
+        doc_type = (rowd.get("doc_type") or "").upper()
+        if "QUOTE" not in doc_type:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Not a quote/proposal document (doc_type={rowd.get('doc_type')})",
+            )
+
+        old_final_key = rowd.get("final_s3_key")
+
+    storage = get_storage()
+
+    try:
+        final_pdf_bytes = build_proposal_document(fields)
+
+        now = datetime.now(timezone.utc)
+        d = now.date().isoformat()
+        stamp = now.strftime("%Y%m%d%H%M%S")
+        final_key = f"final/proposals/{d}/{doc_id}-{stamp}.pdf"
+
+        storage.upload_pdf_bytes(final_key, final_pdf_bytes)
+
+        proposal_number = str(fields.get("proposal_number") or "").strip() or None
+        customer_name = str(fields.get("customer_name") or "").strip() or None
+        customer_email = str(fields.get("contact_email") or "").strip() or None
+        customer_address = str(fields.get("customer_address") or "").strip() or None
+        property_address = str(fields.get("property_address") or "").strip() or None
+
+        with SessionLocal() as db:
+            db.execute(
+                text(
+                    """
+                    UPDATE public.documents
+                    SET
+                        final_s3_key = :final_s3_key,
+                        status = 'FINALIZED',
+                        customer_name = COALESCE(:customer_name, customer_name),
+                        customer_email = COALESCE(:customer_email, customer_email),
+                        property_address = COALESCE(:property_address, property_address),
+                        quote_number = COALESCE(:quote_number, quote_number),
+                        extracted_fields = CAST(:fields AS jsonb),
+                        user_overrides = CAST(:fields AS jsonb),
+                        updated_at = now(),
+                        error = null
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": doc_id,
+                    "final_s3_key": final_key,
+                    "customer_name": customer_name,
+                    "customer_email": customer_email,
+                    "property_address": property_address,
+                    "quote_number": proposal_number,
+                    "fields": json.dumps(fields),
+                },
+            )
+
+            if proposal_number:
+                db.execute(
+                    text(
+                        """
+                        UPDATE public.documents
+                        SET status = 'REPLACED',
+                            updated_at = now()
+                        WHERE quote_number = :quote_number
+                          AND id <> :keep_id
+                          AND COALESCE(status, '') <> 'REPLACED'
+                          AND (
+                                doc_type = 'PROJECT_QUOTE'
+                                OR doc_type = 'SERVICE_QUOTE'
+                                OR doc_type ILIKE '%QUOTE%'
+                              )
+                        """
+                    ),
+                    {
+                        "quote_number": proposal_number,
+                        "keep_id": doc_id,
+                    },
+                )
+
+            db.commit()
+
+        if old_final_key and old_final_key != final_key:
+            try:
+                storage.delete_object(old_final_key)
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "doc_id": doc_id,
+            "doc_type": "PROJECT_QUOTE",
+            "proposal_number": proposal_number,
+            "quote_number": proposal_number,
+            "final_s3_key": final_key,
+            "customer_email": customer_email,
+            "customer_address": customer_address,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Proposal save-final failed: {e}")
+    
 @app.post("/api/documents/{doc_id}/save-final")
 def save_final(doc_id: str, body: dict = Body(...)):
     fields = body.get("fields")
@@ -751,24 +899,114 @@ def _is_reviewable_quote(doc_type: str) -> bool:
     dt = (doc_type or "").upper().replace(" ", "_")
     return ("SERVICE_QUOTE" in dt) or ("PROJECT_QUOTE" in dt) or ("QUOTE" in dt)
 
+def _is_proposal_doc(row: dict) -> bool:
+    dt = (row.get("doc_type") or "").upper().replace(" ", "_")
+    if dt != "PROJECT_QUOTE":
+        return False
+
+    extracted = _as_dict_maybe(row.get("extracted_fields"))
+    overrides = _as_dict_maybe(row.get("user_overrides"))
+
+    doc_label = str(
+        overrides.get("doc_label")
+        or extracted.get("doc_label")
+        or ""
+    ).strip().upper()
+
+    proposal_number = str(
+        overrides.get("proposal_number")
+        or extracted.get("proposal_number")
+        or ""
+    ).strip()
+
+    quote_number = str(row.get("quote_number") or "").strip().upper()
+
+    return doc_label == "PROPOSAL" or bool(proposal_number) or quote_number.startswith("P-")
+
+
+def _doc_word_for_reviewable(row: dict) -> str:
+    return "Proposal" if _is_proposal_doc(row) else "Quote"
 
 def _extract_quote_info(row: dict) -> tuple[str | None, str | None, str | None]:
-    final_json = row.get("final_json") or {}
+    final_json = _as_dict_maybe(row.get("final_json"))
+    extracted = _as_dict_maybe(row.get("extracted_fields"))
+    overrides = _as_dict_maybe(row.get("user_overrides"))
 
-    quote_number = None
-    property_name = None
-    company_name = None
+    quote_number = (
+        (final_json.get("quote_number") or "").strip()
+        or (overrides.get("quote_number") or "").strip()
+        or (extracted.get("quote_number") or "").strip()
+        or (str(row.get("quote_number") or "").strip())
+        or None
+    )
 
-    if isinstance(final_json, dict):
-        quote_number = (final_json.get("quote_number") or "").strip() or None
-        property_name = (final_json.get("property_name") or "").strip() or None
-        company_name = (final_json.get("company_name") or "").strip() or None
+    def first_nonempty(*values) -> str:
+        for v in values:
+            s = str(v or "").strip()
+            if s:
+                return s
+        return ""
 
-    quote_number = quote_number or (str(row.get("quote_number") or "").strip() or None)
-    property_name = property_name or (str(row.get("property_address") or "").strip() or None)
+    def combine_name_and_address(name: str, address: str) -> str | None:
+        name = (name or "").strip()
+        address = (address or "").strip()
+
+        if name and address:
+            return f"{name}<br>{address}"
+        if name:
+            return name
+        if address:
+            return address
+        return None
+
+    if _is_proposal_doc(row):
+        property_label = first_nonempty(
+            final_json.get("property_name"),
+            overrides.get("property_name"),
+            extracted.get("property_name"),
+        )
+        property_address = first_nonempty(
+            final_json.get("property_address"),
+            overrides.get("property_address"),
+            extracted.get("property_address"),
+            row.get("property_address"),
+        )
+
+        company_label = first_nonempty(
+            final_json.get("customer_name"),
+            overrides.get("customer_name"),
+            extracted.get("customer_name"),
+            final_json.get("company_name"),
+            overrides.get("company_name"),
+            extracted.get("company_name"),
+            row.get("customer_name"),
+        )
+        company_address = first_nonempty(
+            final_json.get("customer_address"),
+            overrides.get("customer_address"),
+            extracted.get("customer_address"),
+        )
+
+        property_name = combine_name_and_address(property_label, property_address)
+        company_name = combine_name_and_address(company_label, company_address)
+    else:
+        property_label = first_nonempty(
+            final_json.get("property_name"),
+            overrides.get("property_name"),
+            extracted.get("property_name"),
+            row.get("property_address"),
+        )
+        company_label = first_nonempty(
+            final_json.get("company_name"),
+            overrides.get("company_name"),
+            extracted.get("company_name"),
+            row.get("customer_name"),
+        )
+
+        property_name = property_label or None
+        company_name = company_label or None
 
     return quote_number, property_name, company_name
-
 
 def _display_quote_label(quote_number: str | None, doc_id: str) -> str:
     return (quote_number or "").strip() or doc_id[:8]
@@ -881,8 +1119,27 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             if not review_base:
                 raise RuntimeError("Missing PUBLIC_PORTAL_BASE_URL")
 
-            approve_token = make_token(real_doc_id, "accept", extra_claims={"quote_number": display_quote_number})
-            reject_token = make_token(real_doc_id, "reject", extra_claims={"quote_number": display_quote_number})
+            approve_token = make_token(
+                real_doc_id,
+                "accept",
+                extra_claims={
+                    "quote_number": display_quote_number,
+                    "proposal_number": display_quote_number if _is_proposal_doc(rowd) else None,
+                    "doc_type": rowd.get("doc_type"),
+                    "doc_label": _doc_word_for_reviewable(rowd),
+                },
+            )
+
+            reject_token = make_token(
+                real_doc_id,
+                "reject",
+                extra_claims={
+                    "quote_number": display_quote_number,
+                    "proposal_number": display_quote_number if _is_proposal_doc(rowd) else None,
+                    "doc_type": rowd.get("doc_type"),
+                    "doc_label": _doc_word_for_reviewable(rowd),
+                },
+            )
 
             approve_url = f"{review_base}/review?token={approve_token}"
             reject_url = f"{review_base}/review?token={reject_token}"
@@ -897,11 +1154,13 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                     payment_url = None
 
         if reviewable:
-            template_name = "quote.html"
+            doc_word = _doc_word_for_reviewable(rowd)
+            template_name = "proposal.html" if doc_word == "Proposal" else "quote.html"
+
             default_subject = (
-                f"Quote #{display_quote_number} - {property_name}"
+                f"{doc_word} #{display_quote_number} - {property_name}"
                 if property_name
-                else f"Quote #{display_quote_number} - Please Review"
+                else f"{doc_word} #{display_quote_number} - Please Review"
             )
             subject = (body.subject or "").strip() or default_subject
 
@@ -921,8 +1180,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
 
             text_body = (
                 f"{greeting}\n\n"
-                f"Here is your Quote #{display_quote_number}.\n"
-                f"View Quote: {file_url}\n\n"
+                f"Here is your {doc_word} #{display_quote_number}.\n"
+                f"View {doc_word}: {file_url}\n\n"
             )
 
             if additional_document_names:
@@ -1069,10 +1328,10 @@ class RejectIn(BaseModel):
     token: str
 
 
-def _notify_support_approved(quote_number: str, po: str | None, note: str | None):
-    subject = f"Quote #{quote_number} APPROVED"
+def _notify_support_approved(doc_word: str, quote_number: str, po: str | None, note: str | None):
+    subject = f"{doc_word} #{quote_number} APPROVED"
 
-    lines = [f"Quote #{quote_number} has been APPROVED.", ""]
+    lines = [f"{doc_word} #{quote_number} has been APPROVED.", ""]
     if po and po.strip():
         lines.append(f"PO Number: {po.strip()}")
     if note and note.strip():
@@ -1091,10 +1350,10 @@ def _notify_support_approved(quote_number: str, po: str | None, note: str | None
     )
 
 
-def _notify_support_rejected(quote_number: str, reason: str | None):
-    subject = f"Quote #{quote_number} REJECTED"
+def _notify_support_rejected(doc_word: str, quote_number: str, reason: str | None):
+    subject = f"{doc_word} #{quote_number} REJECTED"
 
-    lines = [f"Quote #{quote_number} has been REJECTED.", ""]
+    lines = [f"{doc_word} #{quote_number} has been REJECTED.", ""]
     if reason and reason.strip():
         lines.append(f"Reason: {reason.strip()}")
 
@@ -1109,7 +1368,6 @@ def _notify_support_rejected(quote_number: str, reason: str | None):
         cc_emails=["sarah@mainlinefire.com"],
         attachments=[],
     )
-
 
 @app.post("/api/documents/{doc_id}/accept")
 def accept_document(doc_id: str, body: AcceptIn):
@@ -1147,6 +1405,7 @@ def accept_document(doc_id: str, body: AcceptIn):
 
         quote_number, _, _ = _extract_quote_info(rowd)
         quote_label = _display_quote_label(quote_number, doc_id)
+        doc_word = _doc_word_for_reviewable(rowd)
 
         status = (rowd.get("status") or "").upper()
 
@@ -1154,7 +1413,7 @@ def accept_document(doc_id: str, body: AcceptIn):
             return {"ok": True, "id": doc_id, "status": "APPROVED", "message": "Already approved."}
 
         if status == "REJECTED":
-            raise HTTPException(status_code=409, detail=f"Quote #{quote_label} was already rejected.")
+            raise HTTPException(status_code=409, detail=f"{doc_word} #{quote_label} was already rejected.")
 
         if status not in ("SENT", "FINALIZED"):
             raise HTTPException(status_code=409, detail=f"Cannot approve when status={rowd['status']}")
@@ -1177,7 +1436,7 @@ def accept_document(doc_id: str, body: AcceptIn):
         )
         db.commit()
 
-    _notify_support_approved(quote_label, body.quote_po_number, body.quote_note)
+    _notify_support_approved(doc_word, quote_label, body.quote_po_number, body.quote_note)
 
     if body.send_email:
         return send_email_any(doc_id, SendEmailIn(client_email=None, cc=body.cc))
@@ -1221,6 +1480,7 @@ def reject_document(doc_id: str, body: RejectIn):
 
         quote_number, _, _ = _extract_quote_info(rowd)
         quote_label = _display_quote_label(quote_number, doc_id)
+        doc_word = _doc_word_for_reviewable(rowd)
 
         status = (rowd.get("status") or "").upper()
 
@@ -1228,7 +1488,7 @@ def reject_document(doc_id: str, body: RejectIn):
             return {"ok": True, "id": doc_id, "status": "REJECTED", "message": "Already rejected."}
 
         if status == "APPROVED":
-            raise HTTPException(status_code=409, detail=f"Quote #{quote_label} was already approved.")
+            raise HTTPException(status_code=409, detail=f"{doc_word} #{quote_label} was already approved.")
 
         if status not in ("SENT", "FINALIZED"):
             raise HTTPException(status_code=409, detail=f"Cannot reject when status={rowd['status']}")
@@ -1248,7 +1508,7 @@ def reject_document(doc_id: str, body: RejectIn):
         )
         db.commit()
 
-    _notify_support_rejected(quote_label, body.reason)
+    _notify_support_rejected(doc_word, quote_label, body.reason)
 
     return {"ok": True, "id": doc_id, "status": "REJECTED"}
 

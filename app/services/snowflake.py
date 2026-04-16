@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from dotenv import load_dotenv
 import snowflake.connector
@@ -70,6 +70,144 @@ def get_snowflake_connection():
     )
 
 
+def _execute_query(sql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    conn = get_snowflake_connection()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(sql, params)
+            cols = [d[0].lower() for d in cur.description]
+            rows = cur.fetchall()
+            return [dict(zip(cols, row)) for row in rows]
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+
+
+# =========================================================
+# Proposal lookup helpers
+# =========================================================
+
+def search_active_customers_by_name(name: str, limit: int = 50) -> List[Dict[str, Any]]:
+    search = (name or "").strip()
+    if not search:
+        return []
+
+    try:
+        safe_limit = int(limit)
+    except (TypeError, ValueError):
+        safe_limit = 50
+
+    safe_limit = max(1, min(safe_limit, 100))
+
+    sql = f"""
+    SELECT
+        id                    AS customer_id,
+        name                  AS customer_name,
+        customer_code,
+        type                  AS customer_type,
+
+        billing_address_line1 AS address,
+        billing_city          AS city,
+        billing_state         AS state,
+        CONCAT_WS(', ',
+            NULLIF(billing_address_line1, ''),
+            NULLIF(billing_city, ''),
+            NULLIF(billing_state, '')
+        )                     AS full_address,
+
+        email,
+        phone_primary,
+        phone_alternate
+
+    FROM BUILDOPS_OPERATIONAL_DATA.SHARE.CUSTOMER
+    WHERE LOWER(name) LIKE LOWER(%s)
+      AND is_active = TRUE
+      AND is_deleted = FALSE
+    ORDER BY name ASC
+    LIMIT {safe_limit}
+    """
+
+    return _execute_query(sql, (f"%{search}%",))
+
+
+def get_properties_for_customer(customer_id: str) -> List[Dict[str, Any]]:
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        return []
+
+    sql = """
+    SELECT
+        c.id                    AS customer_id,
+        c.name                  AS customer_name,
+
+        cp.id                   AS property_id,
+        cp.name                 AS property_name,
+
+        cp.address_line1        AS property_address,
+        cp.city                 AS property_city,
+        cp.state                AS property_state,
+        cp.postal_code          AS property_postal_code,
+        cp.country              AS property_country,
+        CONCAT_WS(', ',
+            NULLIF(cp.address_line1, ''),
+            NULLIF(cp.city, ''),
+            NULLIF(cp.state, ''),
+            NULLIF(cp.postal_code, '')
+        )                       AS property_full_address
+
+    FROM BUILDOPS_OPERATIONAL_DATA.SHARE.CUSTOMER c
+
+    LEFT JOIN (
+        SELECT
+            p.customer_id,
+            p.id,
+            p.name,
+            p.address_line1,
+            p.address_line2,
+            p.city,
+            p.state,
+            p.postal_code,
+            p.country
+        FROM BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY p
+        WHERE p.is_deleted = FALSE
+          AND p.is_active = TRUE
+
+        UNION
+
+        SELECT
+            pc.customer_id,
+            p.id,
+            p.name,
+            p.address_line1,
+            p.address_line2,
+            p.city,
+            p.state,
+            p.postal_code,
+            p.country
+        FROM BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY_CUSTOMERS pc
+        JOIN BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY p
+            ON p.id = pc.property_id
+        WHERE pc.is_deleted = FALSE
+          AND p.is_deleted = FALSE
+          AND p.is_active = TRUE
+    ) cp ON cp.customer_id = c.id
+
+    WHERE c.id = %s
+      AND c.is_deleted = FALSE
+
+    ORDER BY cp.name ASC
+    """
+
+    rows = _execute_query(sql, (customer_id,))
+    return [row for row in rows if row.get("property_id")]
+
+
+# =========================================================
+# Existing invoice recipient helpers
+# =========================================================
+
 def get_customer_representatives(customer_id: str) -> List[Dict[str, Any]]:
     sql = """
     SELECT
@@ -89,19 +227,7 @@ def get_customer_representatives(customer_id: str) -> List[Dict[str, Any]]:
       AND cr.CUSTOMER_ID = %s
     ORDER BY cr.FULL_NAME
     """
-
-    conn = get_snowflake_connection()
-    try:
-        cur = conn.cursor()
-        try:
-            cur.execute(sql, (customer_id,))
-            cols = [d[0].lower() for d in cur.description]
-            rows = cur.fetchall()
-            return [dict(zip(cols, row)) for row in rows]
-        finally:
-            cur.close()
-    finally:
-        conn.close()
+    return _execute_query(sql, (customer_id,))
 
 
 def get_property_representatives(property_id: str) -> List[Dict[str, Any]]:
@@ -124,19 +250,7 @@ def get_property_representatives(property_id: str) -> List[Dict[str, Any]]:
       AND pr.PROPERTY_ID = %s
     ORDER BY pr.FULL_NAME
     """
-
-    conn = get_snowflake_connection()
-    try:
-        cur = conn.cursor()
-        try:
-            cur.execute(sql, (property_id,))
-            cols = [d[0].lower() for d in cur.description]
-            rows = cur.fetchall()
-            return [dict(zip(cols, row)) for row in rows]
-        finally:
-            cur.close()
-    finally:
-        conn.close()
+    return _execute_query(sql, (property_id,))
 
 
 def _clean_rep_email(email: Optional[str]) -> str:

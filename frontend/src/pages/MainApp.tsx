@@ -262,12 +262,21 @@ export default function MainApp() {
             </button>
           </div>
 
-          <div className="row gap8">
+          <div className="row gap8" style={{ marginBottom: 8 }}>
             <button
               className="btn btnHistory"
               onClick={() => navigate("/history")}
             >
               Document History
+            </button>
+          </div>
+
+          <div className="row gap8">
+            <button
+              className="btn btnProposal"
+              onClick={() => navigate("/proposal")}
+            >
+              🔥 Proposal Builder
             </button>
           </div>
 

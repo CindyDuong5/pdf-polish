@@ -98,3 +98,79 @@ export type DocumentHistoryRow = {
   created_at?: string | null;
   updated_at?: string | null;
 };
+
+export type ProposalCustomer = {
+  customer_id: string;
+  customer_name: string | null;
+  customer_code: string | null;
+  customer_type: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  full_address: string | null;
+  email: string | null;
+  phone_primary: string | null;
+  phone_alternate: string | null;
+};
+
+export type ProposalProperty = {
+  customer_id: string;
+  customer_name: string | null;
+  property_id: string;
+  property_name: string | null;
+  property_address: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_postal_code: string | null;
+  property_country: string | null;
+  property_full_address: string | null;
+};
+
+export type ProposalCustomerSearchResponse = {
+  ok: boolean;
+  query: string;
+  count: number;
+  items: ProposalCustomer[];
+};
+
+export type ProposalPropertyListResponse = {
+  ok: boolean;
+  customer_id: string;
+  count: number;
+  items: ProposalProperty[];
+};
+
+export type ProposalItem = {
+  item: string;
+  description: string;
+  price: string;
+};
+
+export type ProposalStaticFields = {
+  proposal_number: string;
+  proposal_date: string;
+  proposal_type: string;
+
+  customer_id: string;
+  customer_name: string;
+  customer_address: string;
+
+  property_id: string;
+  property_name: string;
+  property_address: string;
+
+  contact_name: string;
+  contact_email: string;
+  contact_phone: string;
+
+  prepared_by: string;
+  scope_summary: string;
+  exclusions: string;
+
+  subtotal: string;
+  tax_rate: string;
+  tax: string;
+  total: string;
+
+  items: ProposalItem[];
+};

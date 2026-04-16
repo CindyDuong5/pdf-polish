@@ -1,0 +1,146 @@
+<!--app/email/templates/proposal.html-->
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f6f7f9;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;line-height:1.6;color:#111;font-size:16px;">
+
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+      Your Proposal is ready. View, Approve, or Reject within 30 days.
+    </div>
+
+    <div style="max-width:720px;margin:0 auto;padding:28px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e6e8ee;">
+
+        <tr>
+          <td style="background:#000;padding:32px 22px;color:#fff;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td align="left" style="width:50%;">
+                  <img
+                    src="https://mainline-certificates.s3.ca-central-1.amazonaws.com/email-assets/Mainline-Primary-Logo-White.png"
+                    alt="Mainline Fire Protection"
+                    width="180"
+                    style="display:block;max-width:180px;height:auto;"
+                  />
+                </td>
+
+                <td align="right" style="width:50%;text-align:right;">
+                  <div style="font-size:18px;font-weight:800;letter-spacing:.3px;">
+                    {% if quote_number %}Proposal #{{ quote_number }}{% else %}Proposal{% endif %}
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:24px 22px 12px 22px;">
+            <p style="margin:0 0 14px 0;font-size:16px;color:#111;">
+              {% if client_name %}Good day {{ client_name }},{% else %}Good day,{% endif %}
+            </p>
+
+            <p style="margin:0 0 18px 0;color:#111;">
+              {% if quote_number %}
+                Here is your <strong>Proposal #{{ quote_number }}</strong>.
+              {% else %}
+                Here is your <strong>Proposal</strong>.
+              {% endif %}
+              Please review the details below. You can view the proposal and then approve or reject it.
+            </p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:10px 0 4px 0;">
+              <tr>
+                <td style="width:50%;vertical-align:top;padding-right:10px;">
+                  {% if property_name %}
+                  <div style="margin:0 0 10px 0;">
+                    <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Property</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">{{ property_name | safe }}</div>
+                  </div>
+                  {% endif %}
+                </td>
+
+                <td style="width:50%;vertical-align:top;padding-left:10px;">
+                  {% if company_name %}
+                  <div style="margin:0 0 10px 0;">
+                    <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.03em;">Company</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;line-height:1.4;">{{ company_name | safe }}</div>
+                  </div>
+                  {% endif %}
+                </td>
+              </tr>
+
+              {% if quote_url %}
+              <tr>
+                <td colspan="2" style="padding-top:12px;">
+                  <a href="{{ quote_url }}" target="_blank" rel="noopener noreferrer"
+                    style="display:inline-block;width:100%;text-align:center;background:#fff;color:#111;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;border:2px solid #111;">
+                    View Proposal
+                  </a>
+                </td>
+              </tr>
+              {% endif %}
+            </table>
+
+            {% if approve_url or reject_url %}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0 4px 0;">
+              <tr>
+                <td style="width:50%;vertical-align:top;padding-right:8px;">
+                  {% if approve_url %}
+                  <a href="{{ approve_url }}" target="_blank" rel="noopener noreferrer"
+                    style="display:inline-block;width:100%;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    Approve
+                  </a>
+                  {% endif %}
+                </td>
+                <td style="width:50%;vertical-align:top;padding-left:8px;">
+                  {% if reject_url %}
+                  <a href="{{ reject_url }}" target="_blank" rel="noopener noreferrer"
+                    style="display:inline-block;width:100%;text-align:center;background:#e5e7eb;color:#111;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    Reject
+                  </a>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+            {% endif %}
+
+            <p style="margin:16px 0 6px 0;font-size:14px;color:#4b5563;">
+              Please note: the approval and rejection buttons above will remain active for
+              <strong>30 days</strong> from the date this email is sent.
+            </p>
+
+            <div style="margin:18px 0 10px 0;padding:14px 16px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:10px;font-size:14px;color:#374151;">
+              {% if additional_document_names and additional_document_names|length > 0 %}
+              <div style="margin-bottom:10px;">
+                <strong>Additional Documents:</strong>
+                <ul style="margin:6px 0 0 18px;padding:0;">
+                  {% for name in additional_document_names %}
+                  <li style="margin:4px 0;">{{ name }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+
+              Need help? Reply to this email or call
+              <a href="tel:+14163050704" style="color:#2563eb;text-decoration:underline;">416-305-0704</a>.
+            </div>
+
+            <p style="margin:12px 0 0 0;font-size:14px;color:#4b5563;">
+              We’d value your feedback! Please leave
+              <a href="https://g.page/r/CZHY-SVSO1pBEAI/review" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:underline;">a quick review</a>.
+            </p>
+
+            <p style="margin:20px 0 8px 0;font-size:16px;color:#111;">
+              Thank you for choosing Mainline to protect your community.<br/>
+              <span style="color:#374151;">Mainline Fire Protection</span>
+            </p>
+          </td>
+        </tr>
+      </table>
+
+      <div style="text-align:center;color:#6b7280;font-size:12px;margin:14px 0 0 0;">
+        © {{ (now | default('')) }} Mainline Fire Protection
+      </div>
+    </div>
+  </body>
+</html>

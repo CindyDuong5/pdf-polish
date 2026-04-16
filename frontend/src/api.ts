@@ -10,7 +10,9 @@ async function httpJson(url: string, init?: RequestInit) {
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
-  } catch {}
+  } catch {
+    // ignore non-json response
+  }
 
   if (!res.ok) {
     throw new Error(data?.detail || text || res.statusText);
@@ -18,6 +20,8 @@ async function httpJson(url: string, init?: RequestInit) {
 
   return data;
 }
+
+/* ---------------- Shared / generic document types ---------------- */
 
 export type ListDocumentsParams = {
   q?: string;
@@ -71,6 +75,19 @@ export type SendEmailResponse = {
   quote_number?: string | null;
   subject?: string;
 };
+
+export type AcceptQuotePayload = {
+  token: string;
+  quote_po_number?: string | null;
+  quote_note?: string | null;
+};
+
+export type RejectQuotePayload = {
+  token: string;
+  reason?: string | null;
+};
+
+/* ---------------- Invoice types ---------------- */
 
 export type InvoiceRecipientSource =
   | "property"
@@ -165,16 +182,7 @@ export type GetInvoicePaymentLinkResponse = {
   [key: string]: any;
 };
 
-export type AcceptQuotePayload = {
-  token: string;
-  quote_po_number?: string | null;
-  quote_note?: string | null;
-};
-
-export type RejectQuotePayload = {
-  token: string;
-  reason?: string | null;
-};
+/* ---------------- Additional documents types ---------------- */
 
 export type AdditionalDocumentItem = {
   id: string;
@@ -212,6 +220,107 @@ export type ListDocumentHistoryParams = {
   q?: string;
 };
 
+/* ---------------- Proposal types ---------------- */
+
+export type ProposalCustomer = {
+  customer_id: string;
+  customer_name: string | null;
+  customer_code: string | null;
+  customer_type: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  full_address: string | null;
+  email: string | null;
+  phone_primary: string | null;
+  phone_alternate: string | null;
+};
+
+export type ProposalProperty = {
+  customer_id: string;
+  customer_name: string | null;
+  property_id: string;
+  property_name: string | null;
+  property_address: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_postal_code: string | null;
+  property_country: string | null;
+  property_full_address: string | null;
+};
+
+export type ProposalCustomerSearchResponse = {
+  ok: boolean;
+  query: string;
+  count: number;
+  items: ProposalCustomer[];
+};
+
+export type ProposalPropertyListResponse = {
+  ok: boolean;
+  customer_id: string;
+  count: number;
+  items: ProposalProperty[];
+};
+
+export type ProposalItem = {
+  item: string;
+  description: string;
+  price: string;
+};
+
+export type ProposalStaticFields = {
+  proposal_number: string;
+  proposal_date: string;
+  proposal_type: string;
+
+  customer_id: string;
+  customer_name: string;
+  customer_address: string;
+
+  property_id: string;
+  property_name: string;
+  property_address: string;
+
+  contact_name: string;
+  contact_email: string;
+  contact_phone: string;
+
+  prepared_by: string;
+  scope_summary: string;
+  exclusions: string;
+
+  subtotal: string;
+  tax_rate: string;
+  tax: string;
+  total: string;
+
+  items: ProposalItem[];
+};
+
+export type BuildProposalResponse = {
+  ok: boolean;
+  doc_id: string;
+  doc_type: string;
+  proposal_number?: string | null;
+  quote_number?: string | null;
+  styled_draft_s3_key?: string | null;
+  url?: string | null;
+  fields?: any;
+};
+
+export type SaveFinalProposalResponse = {
+  ok: boolean;
+  doc_id: string;
+  doc_type?: string | null;
+  proposal_number?: string | null;
+  quote_number?: string | null;
+  final_s3_key?: string | null;
+  customer_email?: string | null;
+};
+
+/* ---------------- Generic document APIs ---------------- */
+
 export async function listDocuments(params: ListDocumentsParams) {
   const usp = new URLSearchParams();
 
@@ -234,7 +343,6 @@ export async function restyleDoc(docId: string): Promise<RestyleDocResponse> {
   });
 }
 
-// fields + final
 export async function getFields(docId: string): Promise<GetFieldsResponse> {
   return httpJson(`${API_BASE}/api/documents/${docId}/fields`);
 }
@@ -250,7 +358,8 @@ export async function saveFinal(
   });
 }
 
-// service quote email
+/* ---------------- Quote / proposal email ---------------- */
+
 export async function sendEmail(
   docId: string,
   payload: SendEmailPayload
@@ -261,6 +370,29 @@ export async function sendEmail(
     body: JSON.stringify(payload),
   });
 }
+
+export async function acceptQuote(docId: string, payload: AcceptQuotePayload) {
+  return httpJson(`${API_BASE}/api/documents/${docId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function rejectQuote(docId: string, payload: RejectQuotePayload) {
+  return httpJson(`${API_BASE}/api/documents/${docId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getQuoteDecision(docId: string, token: string) {
+  const qs = new URLSearchParams({ token }).toString();
+  return httpJson(`${API_BASE}/api/documents/${docId}/quote-decision?${qs}`);
+}
+
+/* ---------------- Invoice APIs ---------------- */
 
 export async function sendInvoice(
   docId: string,
@@ -289,27 +421,6 @@ export async function getInvoicePaymentLink(
   });
 }
 
-export async function acceptQuote(docId: string, payload: AcceptQuotePayload) {
-  return httpJson(`${API_BASE}/api/documents/${docId}/accept`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function rejectQuote(docId: string, payload: RejectQuotePayload) {
-  return httpJson(`${API_BASE}/api/documents/${docId}/reject`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function getQuoteDecision(docId: string, token: string) {
-  const qs = new URLSearchParams({ token }).toString();
-  return httpJson(`${API_BASE}/api/documents/${docId}/quote-decision?${qs}`);
-}
-
 export async function buildInvoiceByNumber(
   invoiceNumber: string
 ): Promise<BuildInvoiceResponse> {
@@ -331,6 +442,51 @@ export async function saveFinalInvoice(
   });
 }
 
+/* ---------------- Proposal APIs ---------------- */
+
+export async function searchProposalCustomers(
+  q: string,
+  limit = 20
+): Promise<ProposalCustomerSearchResponse> {
+  const params = new URLSearchParams({
+    q,
+    limit: String(limit),
+  });
+
+  return httpJson(
+    `${API_BASE}/api/proposals/customers/search?${params.toString()}`
+  );
+}
+
+export async function getProposalProperties(
+  customerId: string
+): Promise<ProposalPropertyListResponse> {
+  return httpJson(`${API_BASE}/api/proposals/customers/${customerId}/properties`);
+}
+
+export async function buildProposal(
+  fields: ProposalStaticFields
+): Promise<BuildProposalResponse> {
+  return httpJson(`${API_BASE}/api/proposals/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+}
+
+export async function saveFinalProposal(
+  docId: string,
+  fields: ProposalStaticFields
+): Promise<SaveFinalProposalResponse> {
+  return httpJson(`${API_BASE}/api/documents/${docId}/proposal/save-final`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+}
+
+/* ---------------- Friendly errors ---------------- */
+
 export function friendlyErrorMessage(e: any): string {
   const msg = e?.message || String(e) || "Something went wrong.";
 
@@ -345,7 +501,8 @@ export function friendlyErrorMessage(e: any): string {
   return msg;
 }
 
-// Additional documents
+/* ---------------- Additional documents ---------------- */
+
 export async function listAdditionalDocuments(
   docId: string
 ): Promise<ListAdditionalDocumentsResponse> {
@@ -374,7 +531,9 @@ export async function uploadAdditionalDocument(
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
-  } catch {}
+  } catch {
+    // ignore non-json response
+  }
 
   if (!res.ok) {
     throw new Error(data?.detail || text || res.statusText);
@@ -387,11 +546,14 @@ export async function addAdditionalDocumentByUrl(
   docId: string,
   payload: AddAdditionalDocumentByUrlPayload
 ): Promise<UploadAdditionalDocumentResponse> {
-  return httpJson(`${API_BASE}/api/documents/${docId}/additional-documents/by-url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  return httpJson(
+    `${API_BASE}/api/documents/${docId}/additional-documents/by-url`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
 }
 
 export async function deleteAdditionalDocument(
@@ -405,6 +567,8 @@ export async function deleteAdditionalDocument(
     }
   );
 }
+
+/* ---------------- History ---------------- */
 
 export async function listDocumentHistory(params?: ListDocumentHistoryParams) {
   const usp = new URLSearchParams();

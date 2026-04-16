@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 import MainApp from "./pages/MainApp";
 import ReviewPage from "./pages/ReviewPage";
 import DocumentHistoryPage from "./pages/DocumentHistoryPage";
+import ProposalPage from "./pages/ProposalPage";
 
 export default function App() {
   return (
@@ -10,6 +11,7 @@ export default function App() {
       <Route path="/" element={<MainApp />} />
       <Route path="/review" element={<ReviewPage />} />
       <Route path="/history" element={<DocumentHistoryPage />} />
+      <Route path="/proposal" element={<ProposalPage />} />
     </Routes>
   );
 }

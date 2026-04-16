@@ -30,7 +30,24 @@ export default function ReviewPage() {
 
   const docId = claims?.doc_id || "";
   const action = (claims?.action as Action) || "";
-  const quoteNumber = (claims?.quote_number || docId.slice(0, 8) || "").toString();
+
+  const docType = String(claims?.doc_type || "").toUpperCase();
+  const tokenDocLabel = String(claims?.doc_label || "").trim();
+
+  const isProposal =
+    tokenDocLabel.toUpperCase() === "PROPOSAL" ||
+    docType === "PROJECT_QUOTE" ||
+    String(claims?.proposal_number || "").trim().length > 0 ||
+    String(claims?.quote_number || "").trim().toUpperCase().startsWith("P-");
+
+  const docLabel = isProposal ? "Proposal" : "Quote";
+
+  const docNumber = (
+    claims?.proposal_number ||
+    claims?.quote_number ||
+    docId.slice(0, 8) ||
+    ""
+  ).toString();
 
   const [po, setPo] = useState("");
   const [note, setNote] = useState("");
@@ -42,16 +59,12 @@ export default function ReviewPage() {
   const [ok, setOk] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // If already decided (or after user submits), lock page
   const [done, setDone] = useState(false);
-
-  // Backend returns APPROVED / REJECTED (not ACCEPTED)
   const [decision, setDecision] = useState<DecisionStatus>(null);
 
   const valid = !!token && !!docId && (action === "accept" || action === "reject");
   const isFinal = decision === "APPROVED" || decision === "REJECTED";
 
-  // On load: check whether quote is already decided
   useEffect(() => {
     let cancelled = false;
 
@@ -72,7 +85,6 @@ export default function ReviewPage() {
           setDecision(status as DecisionStatus);
           setDone(true);
 
-          // Optional: if backend returns stored values, prefill (not shown, but harmless)
           if (status === "APPROVED") {
             setPo(res?.quote_po_number || "");
             setNote(res?.quote_note || "");
@@ -82,8 +94,8 @@ export default function ReviewPage() {
 
           setOk(
             status === "APPROVED"
-              ? "Quote is already approved. Contact support@mainlinefire.com if you need help."
-              : "Quote is already rejected. Contact support@mainlinefire.com if you need help."
+              ? `${docLabel} is already approved. Contact support@mainlinefire.com if you need help.`
+              : `${docLabel} is already rejected. Contact support@mainlinefire.com if you need help.`
           );
         } else {
           setDecision("PENDING");
@@ -99,17 +111,21 @@ export default function ReviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [valid, docId, token]);
+  }, [valid, docId, token, docLabel]);
 
   async function onConfirm() {
     setErr(null);
     setOk(null);
-    if (!valid) return setErr("This link is invalid or expired.");
+
+    if (!valid) {
+      return setErr("This link is invalid or expired.");
+    }
+
     if (isFinal) {
       return setOk(
         decision === "APPROVED"
-          ? "Quote is already approved. Contact support@mainlinefire.com if you need help."
-          : "Quote is already rejected. Contact support@mainlinefire.com if you need help."
+          ? `${docLabel} is already approved. Contact support@mainlinefire.com if you need help.`
+          : `${docLabel} is already rejected. Contact support@mainlinefire.com if you need help.`
       );
     }
 
@@ -122,19 +138,22 @@ export default function ReviewPage() {
           quote_note: note.trim() || null,
         });
 
-        const msg = res?.message || "Approved ✔ Our team has been notified.";
+        const msg =
+          res?.message || `${docLabel} approved ✔ Our team has been notified.`;
         setOk(msg);
 
-        // Lock UI after submit
         setDecision("APPROVED");
         setDone(true);
       } else {
-        const res: any = await rejectQuote(docId, { token, reason: reason.trim() || null });
+        const res: any = await rejectQuote(docId, {
+          token,
+          reason: reason.trim() || null,
+        });
 
-        const msg = res?.message || "Rejected ✔ Our team has been notified.";
+        const msg =
+          res?.message || `${docLabel} rejected ✔ Our team has been notified.`;
         setOk(msg);
 
-        // Lock UI after submit
         setDecision("REJECTED");
         setDone(true);
       }
@@ -145,18 +164,19 @@ export default function ReviewPage() {
     }
   }
 
-  const actionLabel = action === "accept" ? "Approve Quote" : "Reject Quote";
+  const actionLabel =
+    action === "accept" ? `Approve ${docLabel}` : `Reject ${docLabel}`;
+
   const badgeColor = action === "accept" ? "#16a34a" : "#dc2626";
 
   return (
     <div style={{ maxWidth: 720, margin: "60px auto", padding: 20 }}>
       <div className="card" style={{ padding: 28 }}>
-        {/* Header */}
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 24, fontWeight: 800 }}>{actionLabel}</div>
 
           <div style={{ marginTop: 6, fontSize: 14 }}>
-            Quote #
+            {docLabel} #
             <span
               style={{
                 marginLeft: 6,
@@ -166,7 +186,7 @@ export default function ReviewPage() {
                 fontWeight: 700,
               }}
             >
-              {quoteNumber || "—"}
+              {docNumber || "—"}
             </span>
           </div>
         </div>
@@ -175,9 +195,12 @@ export default function ReviewPage() {
           <div className="alert err">This link is invalid or expired.</div>
         ) : (
           <>
-            {checking && <div className="alert">Checking quote status...</div>}
+            {checking && (
+              <div className="alert">
+                Checking {docLabel.toLowerCase()} status...
+              </div>
+            )}
 
-            {/* If already decided: show message only, no inputs/buttons */}
             {isFinal ? (
               <>
                 {err && <div className="alert err">{err}</div>}
@@ -185,7 +208,6 @@ export default function ReviewPage() {
               </>
             ) : (
               <>
-                {/* Form (only when pending) */}
                 {action === "accept" ? (
                   <>
                     <label style={{ display: "block", marginBottom: 14 }}>
@@ -226,7 +248,7 @@ export default function ReviewPage() {
                       value={reason}
                       disabled={done || loading || checking}
                       onChange={(e) => setReason(e.target.value)}
-                      placeholder="Please tell us why you're rejecting this quote..."
+                      placeholder={`Please tell us why you're rejecting this ${docLabel.toLowerCase()}...`}
                     />
                   </label>
                 )}
@@ -263,7 +285,7 @@ export default function ReviewPage() {
                 </div>
 
                 <div style={{ marginTop: 16, fontSize: 13, color: "#6b7280" }}>
-                  This will update the quote status and notify support@mainlinefire.com.
+                  This will update the {docLabel.toLowerCase()} status and notify support@mainlinefire.com.
                 </div>
               </>
             )}

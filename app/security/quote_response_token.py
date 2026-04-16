@@ -3,17 +3,23 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import jwt
 
 Action = Literal["accept", "reject"]
+
 
 class QuoteResponseClaims(TypedDict):
     doc_id: str
     action: Action
     exp: int
     iat: int
+    doc_type: NotRequired[str]
+    quote_number: NotRequired[str]
+    proposal_number: NotRequired[str]
+    doc_label: NotRequired[str]
+
 
 JWT_ALG = "HS256"
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
@@ -45,6 +51,7 @@ def make_token(
         payload.update(extra_claims)
 
     return jwt.encode(payload, _get_secret(), algorithm=JWT_ALG)
+
 
 def verify_token(token: str) -> QuoteResponseClaims:
     return jwt.decode(token, _get_secret(), algorithms=[JWT_ALG])
