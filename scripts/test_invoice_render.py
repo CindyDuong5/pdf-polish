@@ -38,6 +38,11 @@ def _recalc_totals(normalized: dict) -> dict:
     """
     Recalculate summary totals after forcing labor/parts rows on/off
     or overriding service fee / discount, so the PDF matches what is rendered.
+
+    Simplified tax logic:
+    - everything is taxable
+    - tax = 13% of subtotal after service fee / discount
+    - no taxable_subtotal field needed
     """
     labor_total = sum(_to_float(r.get("price")) for r in (normalized.get("labor_rows") or []))
     parts_total = sum(_to_float(r.get("price")) for r in (normalized.get("parts_rows") or []))
@@ -46,21 +51,22 @@ def _recalc_totals(normalized: dict) -> dict:
     tax_rate_raw = str(normalized.get("sales_tax_rate") or "13").replace("%", "").strip()
     tax_rate = (_to_float(tax_rate_raw) or 13.0) / 100.0
 
-    taxable_subtotal = parts_total
     subtotal = labor_total + parts_total
     subtotal_after_discount_fees = subtotal + service_fee - discount
-    tax_amount = round(taxable_subtotal * tax_rate, 2)
+    tax_amount = round(subtotal_after_discount_fees * tax_rate, 2)
     total = round(subtotal_after_discount_fees + tax_amount, 2)
     amount_paid = _to_float(normalized.get("amount_paid"))
     balance = round(total - amount_paid, 2)
 
     normalized["subtotal"] = _money(subtotal)
-    normalized["taxable_subtotal"] = _money(taxable_subtotal)
     normalized["subtotal_after_discount_fees"] = _money(subtotal_after_discount_fees)
     normalized["tax_amount"] = _money(tax_amount)
     normalized["total"] = _money(total)
     normalized["amount_paid"] = _money(amount_paid)
     normalized["balance"] = _money(balance)
+
+    # remove old field if mapper still provides it
+    normalized.pop("taxable_subtotal", None)
 
     return normalized
 
@@ -191,6 +197,8 @@ def _render_pdf(normalized: dict, output_name: str):
     print("✅ wrote:", out)
     print("   labor rows =", len(normalized.get("labor_rows") or []))
     print("   parts rows =", len(normalized.get("parts_rows") or []))
+    print("   subtotal   =", normalized.get("subtotal"))
+    print("   tax        =", normalized.get("tax_amount"))
     print("   total      =", normalized.get("total"))
     print("   amount_paid=", normalized.get("amount_paid"))
     print("   balance    =", normalized.get("balance"))

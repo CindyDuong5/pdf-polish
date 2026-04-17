@@ -1062,7 +1062,6 @@ def render_invoice_styled_draft(normalized: Dict[str, Any], logo_path: str | Non
         ))
 
     totals_rows.extend([
-        ("Taxable Subtotal", _money(normalized.get("taxable_subtotal")), False, True),
         ("Sales Tax Rate", _s(normalized.get("sales_tax_rate")), False, True),
         ("Tax Amount", _money(normalized.get("tax_amount")), False, True),
     ])
