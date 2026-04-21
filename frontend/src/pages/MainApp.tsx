@@ -4,6 +4,12 @@ import { getLinks, listDocuments, restyleDoc, buildInvoiceByNumber } from "../ap
 import type { DocRow, Links } from "../types";
 import DocumentPanel from "../panels/DocumentPanel";
 import { useNavigate } from "react-router-dom";
+import {
+  getDisplayDocType,
+  getDisplayStatus,
+  getStatusClass,
+  getDocTypeClass,
+} from "../uiLabels";
 import "../styles.css";
 
 function isQuoteDoc(row: DocRow) {
@@ -65,7 +71,7 @@ export default function MainApp() {
     setErr(null);
 
     const data = await listDocuments({
-      limit: 50,
+      limit: 20,
     });
 
     const rawItems = (data.items || []) as DocRow[];
@@ -241,7 +247,7 @@ export default function MainApp() {
         </div>
 
         <div className="searchBox">
-          <div style={{ fontWeight: 900, marginBottom: 6 }}>Generate Invoice</div>
+          <div className="sidebarSectionTitle">Generate Invoice</div>
 
           <div className="row gap8" style={{ marginBottom: 8 }}>
             <input
@@ -262,16 +268,14 @@ export default function MainApp() {
             </button>
           </div>
 
-          <div className="row gap8" style={{ marginBottom: 8 }}>
+          <div className="sidebarActions">
             <button
               className="btn btnHistory"
               onClick={() => navigate("/history")}
             >
               Document History
             </button>
-          </div>
 
-          <div className="row gap8">
             <button
               className="btn btnProposal"
               onClick={() => navigate("/proposal")}
@@ -280,7 +284,10 @@ export default function MainApp() {
             </button>
           </div>
 
-          <div className="mutedSmall">{items.length} documents</div>
+          <div className="sidebarListHeader">
+            <div className="sidebarSectionTitle">Recent Documents</div>
+            <div className="mutedSmall">{items.length} documents</div>
+          </div>
         </div>
 
         <div className="docList">
@@ -288,23 +295,32 @@ export default function MainApp() {
             const label =
               d.invoice_number || d.quote_number || d.job_report_number || d.id.slice(0, 8);
             const isActive = d.id === selectedId;
-            const st = (d.status || "-").toUpperCase();
+            const displayStatus = getDisplayStatus(d);
+            const statusClass = getStatusClass(displayStatus);
+            const docTypeClass = getDocTypeClass(d);
 
             return (
               <button
                 key={d.id}
-                className={`docCard ${isActive ? "active" : ""}`}
+                className={`docCard ${docTypeClass} ${isActive ? "active" : ""}`}
                 onClick={() => setSelectedId(d.id)}
               >
-                <div className="docTitle">
-                  <span className="pill">{d.doc_type || "UNKNOWN"}</span>
+                <div className="docCardTop">
+                  <span className={`pill ${getDisplayDocType(d).replace(/\s+/g, "")}`}>
+                    {getDisplayDocType(d)}
+                  </span>
                   <span className="docLabel">{label}</span>
                 </div>
-                <div className="docMeta">
-                  <span className={`statusDot ${st}`} />
-                  <span>Status: {st}</span>
+
+                <div className={`docMeta statusRow ${statusClass}`}>
+                  <span className={`statusDot ${statusClass}`} />
+                  <span className="statusText">Status: {displayStatus}</span>
                 </div>
-                <div className="docMeta muted">{d.customer_name || d.property_address || ""}</div>
+
+                <div className="docMeta muted docSummary">
+                  {d.customer_name || d.property_address || ""}
+                </div>
+
                 {d.error ? <div className="docError">{d.error}</div> : null}
               </button>
             );
@@ -320,10 +336,10 @@ export default function MainApp() {
             <div className="topBar">
               <div>
                 <div className="pageTitle">
-                  {selected.doc_type || "UNKNOWN"} <span className="muted">—</span> {topLabel}
+                  {getDisplayDocType(selected)} <span className="muted">—</span> {topLabel}
                 </div>
                 <div className="pageSub">
-                  Status: <b>{selected.status || "-"}</b>
+                  Status: <b>{getDisplayStatus(selected)}</b>
                   {!selected.styled_draft_s3_key ? (
                     <span className="warnBadge">Draft generating…</span>
                   ) : null}

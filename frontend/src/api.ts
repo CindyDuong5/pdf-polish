@@ -126,6 +126,7 @@ export type BuildInvoiceResponse = {
 export type SaveFinalInvoiceResponse = {
   ok: boolean;
   final_s3_key?: string | null;
+  status?: string | null;
   payment_url?: string | null;
   property_id?: string | null;
   customer_id?: string | null;
@@ -152,6 +153,7 @@ export type SendInvoiceResponse = {
   bcc: string[];
   subject?: string | null;
   sent_at?: string | null;
+  status?: string | null;
   payment_url?: string | null;
 
   property_id?: string | null;

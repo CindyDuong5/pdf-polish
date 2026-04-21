@@ -1,4 +1,5 @@
 // frontend/src/components/InvoiceEditor.tsx
+
 import React, { useMemo } from "react";
 import { recomputeInvoiceTotals } from "../panels/invoice/totals";
 
@@ -59,6 +60,9 @@ export type InvoiceFields = {
   total?: string;
   amount_paid?: string;
   balance?: string;
+
+  // add this so backend can safely mark invoice as PAID
+  show_paid_stamp?: boolean;
 
   buildops_invoice_id?: string;
   buildops_invoice_number?: string;
@@ -228,6 +232,9 @@ export default function InvoiceEditor(props: {
     const rows = [...(props.value.parts_rows || [])].filter((_, i) => i !== idx);
     props.onChange({ ...props.value, parts_rows: rows });
   };
+
+  const balanceNumber = parseMoney(v.balance);
+  const canMarkPaid = balanceNumber <= 0;
 
   return (
     <div style={{ padding: 12 }}>
@@ -565,6 +572,43 @@ export default function InvoiceEditor(props: {
           </label>
         </div>
 
+        <div className="row gap8" style={{ marginBottom: 8 }}>
+          <label style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Amount Paid</div>
+            <input
+              className="input"
+              placeholder="$0.00"
+              value={props.value.amount_paid || "$0.00"}
+              onChange={(e) => set("amount_paid", e.target.value)}
+            />
+          </label>
+
+          <label
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "flex-end",
+            }}
+          >
+            <div
+              className="input"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                width: "100%",
+                minHeight: 42,
+                opacity: canMarkPaid ? 1 : 0.7,
+              }}
+            >
+              <input type="checkbox" checked={canMarkPaid} disabled />
+              <span>
+                PAID stamp auto-applies when balance is 0.00
+              </span>
+            </div>
+          </label>
+        </div>
+
         <div className="row gap8" style={{ marginBottom: 10 }}>
           <div
             className="input"
@@ -599,8 +643,22 @@ export default function InvoiceEditor(props: {
           </div>
         </div>
 
+        <div className="row gap8" style={{ marginBottom: 10 }}>
+          <div
+            className="input"
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          >
+            <span className="mutedSmall">Balance</span>
+            <b>{v.balance}</b>
+          </div>
+        </div>
+
         <div className="row gap8">
-          <button className="btn btnPrimary" onClick={props.onSave} disabled={!props.canSave || props.saving}>
+          <button
+            className="btn btnPrimary"
+            onClick={props.onSave}
+            disabled={!props.canSave || props.saving}
+          >
             {props.saving ? "Saving..." : "Save Invoice"}
           </button>
           <div className="mutedSmall" style={{ display: "flex", alignItems: "center" }}>

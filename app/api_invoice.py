@@ -1,4 +1,5 @@
 # app/api_invoice.py
+# app/api_invoice.py
 from __future__ import annotations
 
 import json
@@ -38,7 +39,6 @@ class BuildInvoiceIn(BaseModel):
 
 
 class SendInvoiceEmailIn(BaseModel):
-    # accept both (frontend uses `to` + `cc`)
     to_email: Optional[str] = None
     to: Optional[str] = None
 
@@ -74,6 +74,34 @@ def _invoice_total_amount(fields: dict) -> float:
             if amt:
                 return amt
     return 0.0
+
+
+def _is_paid_invoice(fields: dict) -> bool:
+    """
+    Invoice counts as PAID when balance is <= 0.
+
+    We do not require the user to manually check "show_paid_stamp".
+    The stamp should follow the financial state automatically.
+    """
+    if not isinstance(fields, dict):
+        return False
+
+    balance = _parse_money(fields.get("balance"))
+    return balance <= 0
+
+
+def _status_on_save_final(fields: dict) -> str:
+    return "PAID" if _is_paid_invoice(fields) else "FINALIZED"
+
+
+def _status_on_send(fields: dict, current_status: str | None) -> str:
+    """
+    Sending an already-paid invoice should keep it PAID.
+    Sending an unpaid invoice should become SENT.
+    """
+    if (current_status or "").upper() == "PAID":
+        return "PAID"
+    return "PAID" if _is_paid_invoice(fields) else "SENT"
 
 
 def _styled_draft_key_for(doc_id: str) -> str:
@@ -154,7 +182,7 @@ def _get_invoice_recipient_resolution(fields: dict) -> dict:
         rec = resolve_invoice_recipient_suggestion(
             property_id=property_id,
             customer_id=customer_id,
-            primary_email=None,  # do not let Snowflake resolver auto-use bill client fallback
+            primary_email=None,
         ) or {}
 
         to_email = _normalize_email(rec.get("to"))
@@ -268,7 +296,6 @@ def _apply_recipient_fields(fields: dict) -> dict:
     fields["invoice_recipient_cc"] = rec.get("cc") or []
     fields["invoice_recipient_all_emails"] = rec.get("all_emails") or []
 
-    # keep old keys too so existing frontend does not break
     fields["property_rep_to"] = rec.get("to") or ""
     fields["property_rep_cc"] = rec.get("cc") or []
     fields["property_rep_all_emails"] = rec.get("all_emails") or []
@@ -526,6 +553,8 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
     fields["hide_parts"] = bool(fields.get("hide_parts", False))
 
     _apply_recipient_fields(fields)
+    new_status = _status_on_save_final(fields)
+    fields["show_paid_stamp"] = _is_paid_invoice(fields)
 
     with SessionLocal() as db:
         doc = db.execute(
@@ -575,7 +604,7 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
                     UPDATE public.documents
                     SET
                         final_s3_key = :k,
-                        status = 'FINALIZED',
+                        status = :status,
                         customer_name = COALESCE(:name, customer_name),
                         property_address = COALESCE(:addr, property_address),
                         user_overrides = CAST(:fields AS jsonb),
@@ -587,6 +616,7 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
                 {
                     "id": doc_id,
                     "k": fk,
+                    "status": new_status,
                     "name": bill_name,
                     "addr": prop_addr,
                     "fields": json.dumps(fields),
@@ -608,7 +638,9 @@ def save_final_invoice(doc_id: str, body: dict = Body(...)):
 
     return {
         "ok": True,
+        "doc_id": doc_id,
         "final_s3_key": fk,
+        "status": new_status,
         "payment_url": fields.get("payment_url"),
         "property_id": fields.get("property_id"),
         "customer_id": fields.get("customer_id"),
@@ -642,6 +674,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 detail="This invoice has been replaced by a newer version.",
             )
 
+        current_status = (row.get("status") or "").upper()
         fields = _best_fields(row)
         recipient_info = _apply_recipient_fields(fields)
 
@@ -759,6 +792,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
         sent_cc = ", ".join(cc) if cc else None
         sent_bcc = ", ".join(bcc) if bcc else None
+        send_status = _status_on_send(fields, current_status)
 
         db.execute(
             text(
@@ -771,7 +805,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                     sent_at = now(),
                     updated_at = now(),
                     error = null,
-                    status = 'SENT',
+                    status = :status,
                     user_overrides = CAST(:fields AS jsonb)
                 WHERE id = :id
                 """
@@ -781,6 +815,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 "to_email": to_email,
                 "sent_cc": sent_cc,
                 "sent_bcc": sent_bcc,
+                "status": send_status,
                 "fields": json.dumps(fields),
             },
         )
@@ -788,12 +823,14 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
     return {
         "ok": True,
+        "doc_id": doc_id,
         "to": to_email,
         "cc": cc,
         "bcc": bcc,
         "view_url": view_url,
         "payment_url": payment_url,
         "subject": subject,
+        "status": send_status,
         "property_id": fields.get("property_id"),
         "customer_id": fields.get("customer_id"),
         "invoice_recipient_to": fields.get("invoice_recipient_to"),
@@ -803,6 +840,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
         "recipient_source": fields.get("recipient_source"),
         "recipient_message": fields.get("recipient_message"),
     }
+
 
 @router.get("/debug/snowflake")
 def debug_snowflake():

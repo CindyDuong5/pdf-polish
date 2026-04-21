@@ -3,18 +3,13 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listDocumentHistory } from "../api";
 import type { DocumentHistoryRow } from "../types";
+import {
+  getDisplayDocType,
+  getDisplayStatus,
+  getStatusClass,
+  getDocTypeClass,
+} from "../uiLabels";
 import "../styles.css";
-
-function displayType(row: DocumentHistoryRow) {
-  const dt = (row.doc_type || "").toUpperCase();
-
-  if (dt.includes("SERVICE_QUOTE")) return "Service Quote";
-  if (dt.includes("PROJECT_QUOTE")) return "Project Quote";
-  if (dt.includes("QUOTE")) return "Quote";
-  if (dt.includes("INVOICE")) return "Invoice";
-
-  return row.doc_type || "Unknown";
-}
 
 function displayNumber(row: DocumentHistoryRow) {
   return row.invoice_number || row.quote_number || row.job_report_number || "-";
@@ -58,7 +53,7 @@ export default function DocumentHistoryPage() {
       <div className="historyHeader">
         <div>
           <div className="pageTitle">Document History</div>
-          <div className="pageSub">All stored quotes and invoices</div>
+          <div className="pageSub">All stored quotes, proposals, and invoices</div>
         </div>
 
         <div className="row gap8">
@@ -74,7 +69,7 @@ export default function DocumentHistoryPage() {
       <div className="historySearchBar">
         <input
           className="input"
-          placeholder="Search by invoice # or quote #"
+          placeholder="Search by invoice #, quote #, or proposal #"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           onKeyDown={(e) => {
@@ -125,15 +120,21 @@ export default function DocumentHistoryPage() {
               </thead>
               <tbody>
                 {items.map((row) => {
-                  const status = (row.status || "-").toUpperCase();
+                  const displayStatus = getDisplayStatus(row);
+                  const statusClass = getStatusClass(displayStatus);
+                  const docTypeClass = getDocTypeClass(row);
 
                   return (
                     <tr key={row.id}>
-                      <td>{displayType(row)}</td>
+                      <td>
+                        <span className={`historyTypeBadge ${docTypeClass}`}>
+                          {getDisplayDocType(row)}
+                        </span>
+                      </td>
                       <td>{displayNumber(row)}</td>
                       <td>
-                        <span className={`historyStatusBadge ${status}`}>
-                          {status}
+                        <span className={`historyStatusBadge ${statusClass}`}>
+                          {displayStatus}
                         </span>
                       </td>
                       <td>{formatDate(row.updated_at || row.created_at)}</td>
