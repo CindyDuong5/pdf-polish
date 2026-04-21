@@ -41,6 +41,10 @@ def _get_required_env(name: str) -> str:
     return value
 
 
+def _get_tenant_id() -> str:
+    return _get_required_env("BUILDOPS_TENANT_ID")
+
+
 def _load_private_key_bytes() -> bytes:
     key_path = _get_required_env("SNOWFLAKE_PRIVATE_KEY_PATH")
     passphrase = os.getenv("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE", "").strip() or None
@@ -100,6 +104,7 @@ def search_active_customers_by_name(name: str, limit: int = 50) -> List[Dict[str
         safe_limit = 50
 
     safe_limit = max(1, min(safe_limit, 100))
+    tenant_id = _get_tenant_id()
 
     sql = f"""
     SELECT
@@ -125,17 +130,20 @@ def search_active_customers_by_name(name: str, limit: int = 50) -> List[Dict[str
     WHERE LOWER(name) LIKE LOWER(%s)
       AND is_active = TRUE
       AND is_deleted = FALSE
+      AND tenant_id = %s
     ORDER BY name ASC
     LIMIT {safe_limit}
     """
 
-    return _execute_query(sql, (f"%{search}%",))
+    return _execute_query(sql, (f"%{search}%", tenant_id))
 
 
 def get_properties_for_customer(customer_id: str) -> List[Dict[str, Any]]:
     customer_id = (customer_id or "").strip()
     if not customer_id:
         return []
+
+    tenant_id = _get_tenant_id()
 
     sql = """
     SELECT
@@ -173,6 +181,7 @@ def get_properties_for_customer(customer_id: str) -> List[Dict[str, Any]]:
         FROM BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY p
         WHERE p.is_deleted = FALSE
           AND p.is_active = TRUE
+          AND p.tenant_id = %s
 
         UNION
 
@@ -192,15 +201,28 @@ def get_properties_for_customer(customer_id: str) -> List[Dict[str, Any]]:
         WHERE pc.is_deleted = FALSE
           AND p.is_deleted = FALSE
           AND p.is_active = TRUE
+          AND pc.tenant_id = %s
+          AND p.tenant_id = %s
     ) cp ON cp.customer_id = c.id
 
     WHERE c.id = %s
+      AND c.is_active = TRUE
       AND c.is_deleted = FALSE
+      AND c.tenant_id = %s
 
     ORDER BY cp.name ASC
     """
 
-    rows = _execute_query(sql, (customer_id,))
+    rows = _execute_query(
+        sql,
+        (
+            tenant_id,   # PROPERTY p
+            tenant_id,   # PROPERTY_CUSTOMERS pc
+            tenant_id,   # PROPERTY p in join
+            customer_id, # c.id
+            tenant_id,   # CUSTOMER c
+        ),
+    )
     return [row for row in rows if row.get("property_id")]
 
 
@@ -221,11 +243,18 @@ def get_property_details_for_customer(
 
     return None
 
+
 # =========================================================
 # Existing invoice recipient helpers
 # =========================================================
 
 def get_customer_representatives(customer_id: str) -> List[Dict[str, Any]]:
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        return []
+
+    tenant_id = _get_tenant_id()
+
     sql = """
     SELECT
         cr.CUSTOMER_ID,
@@ -240,14 +269,22 @@ def get_customer_representatives(customer_id: str) -> List[Dict[str, Any]]:
     FROM BUILDOPS_OPERATIONAL_DATA.SHARE.CUSTOMER_REPRESENTATIVE cr
     LEFT JOIN BUILDOPS_OPERATIONAL_DATA.SHARE.CUSTOMER c
         ON cr.CUSTOMER_ID = c.ID
+       AND c.TENANT_ID = %s
     WHERE cr.IS_DELETED = FALSE
       AND cr.CUSTOMER_ID = %s
+      AND cr.TENANT_ID = %s
     ORDER BY cr.FULL_NAME
     """
-    return _execute_query(sql, (customer_id,))
+    return _execute_query(sql, (tenant_id, customer_id, tenant_id))
 
 
 def get_property_representatives(property_id: str) -> List[Dict[str, Any]]:
+    property_id = (property_id or "").strip()
+    if not property_id:
+        return []
+
+    tenant_id = _get_tenant_id()
+
     sql = """
     SELECT
         pr.PROPERTY_ID,
@@ -263,11 +300,13 @@ def get_property_representatives(property_id: str) -> List[Dict[str, Any]]:
     FROM BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY_REPRESENTATIVE pr
     LEFT JOIN BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY p
         ON pr.PROPERTY_ID = p.ID
+       AND p.TENANT_ID = %s
     WHERE pr.IS_DELETED = FALSE
       AND pr.PROPERTY_ID = %s
+      AND pr.TENANT_ID = %s
     ORDER BY pr.FULL_NAME
     """
-    return _execute_query(sql, (property_id,))
+    return _execute_query(sql, (tenant_id, property_id, tenant_id))
 
 
 def _clean_rep_email(email: Optional[str]) -> str:
