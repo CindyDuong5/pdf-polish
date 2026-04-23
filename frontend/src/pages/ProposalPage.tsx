@@ -15,8 +15,8 @@ function todayIsoDate(): string {
 
 const DEFAULT_SCOPE_SUMMARY = `Complete the Following Fire & Life Safety Inspections and Testing in Accordance with OFC, OBC, CAN/ULC-S536, NFPA 25, NFPA 10, CSA B64.`;
 
-const DEFAULT_EXCLUSIONS = `• Job to be completed during regular hours 08:00-16:30 Monday to Friday
-• Pricing is subject to parts availability and all items being done concurrently`;
+const DEFAULT_EXCLUSIONS = `- Job to be completed during regular hours 08:00-16:30 Monday to Friday
+- Pricing is subject to parts availability and all items being done concurrently`;
 
 function parseMoney(value: string | number | null | undefined): number | null {
   if (value == null) return null;
@@ -58,10 +58,10 @@ function calculateDerivedFields(next: ProposalStaticFields): ProposalStaticField
 
   return {
     ...next,
-    subtotal: money2(effectiveSubtotal),
+    subtotal: hasAnyNumericItemPrice || manualSubtotal !== null ? money2(effectiveSubtotal) : "",
     tax_rate: String(taxRate),
-    tax: money2(tax),
-    total: money2(total),
+    tax: hasAnyNumericItemPrice || manualSubtotal !== null ? money2(tax) : "",
+    total: hasAnyNumericItemPrice || manualSubtotal !== null ? money2(total) : "",
   };
 }
 

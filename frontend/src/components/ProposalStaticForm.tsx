@@ -6,7 +6,7 @@ type Props = {
   onChange: (patch: Partial<ProposalStaticFields>) => void;
 };
 
-const PREPARED_BY_OPTIONS = ["Aidan", "Nick", "Rob", "Sarah"];
+const PREPARED_BY_OPTIONS = ["Aidan Quinn", "Nick Janevski", "Rob Felstead", "Sarah Caley"];
 const PROPOSAL_TYPE_OPTIONS = ["Project", "Service", "Inspection"];
 
 function sectionCardStyle(): React.CSSProperties {
