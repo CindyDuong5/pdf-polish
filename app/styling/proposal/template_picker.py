@@ -20,8 +20,12 @@ def _fallback(path: Path, fallback: Path) -> Path:
 
 
 def get_cover_template(proposal_type: str) -> Path:
-    filename = f"{proposal_type_key(proposal_type)}.pdf"
-    return _must_exist(TEMPLATE_DIR / "covers" / filename)
+    key = proposal_type_key(proposal_type)
+
+    if key == "inspection":
+        key = "service"
+
+    return _must_exist(TEMPLATE_DIR / "covers" / f"{key}.pdf")
 
 
 def get_intro_template(prepared_by: str) -> Path:
@@ -32,8 +36,12 @@ def get_intro_template(prepared_by: str) -> Path:
 
 
 def get_process_template(proposal_type: str) -> Path:
-    filename = f"{proposal_type_key(proposal_type)}.pdf"
-    return _must_exist(TEMPLATE_DIR / "process" / filename)
+    key = proposal_type_key(proposal_type)
+
+    if key == "inspection":
+        key = "service"
+
+    return _must_exist(TEMPLATE_DIR / "process" / f"{key}.pdf")
 
 
 def get_testimonials_template() -> Path:

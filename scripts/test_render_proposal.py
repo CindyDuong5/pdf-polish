@@ -1,99 +1,113 @@
 # scripts/test_render_proposal.py
+
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 from app.styling.proposal.renderer import render_proposal_pdf
 
 
-def main() -> None:
-    payload = {
+PROPOSAL_TYPES = ["Service", "Inspection", "Project"]
+PREPARED_BY_LIST = [
+    "Nick Janevski",
+    "Rob Felstead",
+    "Sarah Caley",
+    "Aidan Quinn",
+]
+
+
+def base_payload() -> dict:
+    return {
         "proposal_number": "P-1001",
         "proposal_date": "2026-04-22",
-        "proposal_type": "Project",
+        "proposal_type": "Service",
+
         "customer_id": "c8087404-6029-4bf9-954c-3dd9cb80f327",
         "customer_name": "Summerhill Property Management",
         "customer_address": "2600 Skymark Avenue, Mississauga, ON",
+
         "property_id": "7f897be0-7f59-4047-b84a-67b8c5e9235c",
         "property_name": "Cindy House",
         "property_address": "17 Knightsbridge Rd., Brampton, Ontario, L6T 3X9",
+
         "contact_name": "Cindy Test",
         "contact_email": "reneeb@summerhillcondos.com",
         "contact_phone": "123-456-7890",
+
         "prepared_by": "Nick Janevski",
+
         "scope_summary": (
-            "Complete the Following Fire & Life Safety Inspections and Testing in "
-            "Accordance with OFC, OBC, CAN/ULC-S536, NFPA 25, NFPA 10, CSA B64."
-            "All work to be performed by licensed technicians with appropriate certifications and insurance."
-            "Detailed inspection reports will be provided, including documentation of deficiencies and recommendations for corrective actions."
+            "Complete the following fire and life safety work in accordance with "
+            "applicable codes and standards."
         ),
+
+        "included": "All Parts & Labor",
+
         "exclusions": (
             "- Job to be completed during regular hours 08:00-16:30 Monday to Friday\n"
-            "- Pricing is subject to parts availability and all items being done concurrently\n"
-            "- Additional charges may apply for repairs, re-inspections, after-hours work, or if access to devices is not provided at the time of service\n"
+            "- Additional charges may apply if access is not provided at the time of service"
         ),
-        "subtotal": "18450.00",
+
+        "subtotal": "3500.00",
         "tax_rate": "13",
-        "tax": "2398.50",
-        "total": "20848.50",
+        "tax": "455.00",
+        "total": "3955.00",
+
         "items": [
             {
-                "item": "Annual Fire Alarm Inspection",
-                "description": (
-                    "- Annual inspection and testing of fire alarm control panel, annunciator, initiating devices, "
-                    "notification devices, power supplies, batteries, relays, and monitoring interfaces\n"
-                    "- Verify operation of pull stations, smoke detectors, heat detectors, waterflow switches, tamper switches, "
-                    "duct detectors, horn strobes, bells, speakers, and ancillary functions\n"
-                    "- Provide testing documentation and deficiency report"
-                ),
+                "item": "Fire Alarm Inspection",
+                "description": "- Inspect and test fire alarm system devices\n- Provide report and deficiency list",
                 "price": "2200.00",
             },
             {
-                "item": "Monthly Emergency Lighting Inspection",
-                "description": (
-                    "- Monthly function test of emergency light units and exit signs\n"
-                    "- Confirm lamp heads operate, charge indicators are functional, and units remain unobstructed\n"
-                    "- Report failed batteries, lamps, and damaged housings"
-                ),
-                "price": "TBD",
+                "item": "Emergency Lighting Inspection",
+                "description": "- Test emergency lights and exit signs\n- Report failed batteries or lamps",
+                "price": "850.00",
             },
             {
-                "item": "Annual Fire Extinguisher Inspection",
-                "description": (
-                    "- Inspect portable fire extinguishers throughout the property\n"
-                    "- Verify gauge pressure, accessibility, hose condition, pins, seals, labels, cabinet condition, and mounting height\n"
-                    "- Tag extinguishers and identify any units requiring recharge, hydrotest, or replacement"
-                ),
-                "price": "TBD",
-            },
-            {
-                "item": "Monthly Fire Extinguisher Inspection",
-                "description": (
-                    "- Inspect portable fire extinguishers throughout the property\n"
-                    "- Verify gauge pressure, accessibility, hose condition, pins, seals, labels, cabinet condition, and mounting height\n"
-                    "- Tag extinguishers and identify any units requiring recharge, hydrotest, or replacement"
-                ),
-                "price": "1650.00",
-            },
-            {
-                "item": "Monthly Fire Extinguisher Inspection",
-                "description": (
-                    "- Inspect portable fire extinguishers throughout the property\n"
-                    "- Verify gauge pressure, accessibility, hose condition, pins, seals, labels, cabinet condition, and mounting height\n"
-                    "- Tag extinguishers and identify any units requiring recharge, hydrotest, or replacement"
-                ),
-                "price": "1650.00",
+                "item": "Fire Extinguisher Inspection",
+                "description": "- Inspect extinguishers and apply service tags",
+                "price": "450.00",
             },
         ],
     }
 
-    pdf_bytes = render_proposal_pdf(payload)
 
-    out_path = Path("tmp/test_proposal.pdf")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_bytes(pdf_bytes)
+def safe_filename(value: str) -> str:
+    return (
+        value.lower()
+        .replace(" ", "_")
+        .replace(".", "")
+        .replace("-", "_")
+    )
 
-    print(f"Wrote: {out_path.resolve()}")
+
+def main() -> None:
+    out_dir = Path("tmp")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for proposal_type in PROPOSAL_TYPES:
+        for prepared_by in PREPARED_BY_LIST:
+            payload = deepcopy(base_payload())
+
+            payload["proposal_type"] = proposal_type
+            payload["prepared_by"] = prepared_by
+            payload["proposal_number"] = f"P-{safe_filename(proposal_type)}-{safe_filename(prepared_by)}"
+            payload["property_name"] = f"Cindy House - {proposal_type}"
+            payload["scope_summary"] = (
+                f"This is a test {proposal_type.lower()} proposal prepared by {prepared_by}. "
+                "This file is used to confirm the correct cover, intro, process, content, "
+                "testimonial, closing page, and page numbers."
+            )
+
+            pdf_bytes = render_proposal_pdf(payload)
+
+            filename = f"{safe_filename(proposal_type)}_{safe_filename(prepared_by)}.pdf"
+            out_path = out_dir / filename
+            out_path.write_bytes(pdf_bytes)
+
+            print(f"Wrote: {out_path.resolve()}")
 
 
 if __name__ == "__main__":
