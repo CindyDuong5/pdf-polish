@@ -33,6 +33,11 @@ NO_BILLING_CONTACT_MESSAGE = (
     "Please manually enter the email address to send the invoice to."
 )
 
+QUOTE_ROLE_KEYWORDS = (
+    "quote",
+    "all",
+    "proposal",
+)
 
 def _get_required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -243,7 +248,181 @@ def get_property_details_for_customer(
 
     return None
 
+def _role_matches_quote(role: Optional[str]) -> bool:
+    cleaned = _clean_role(role)
+    if not cleaned:
+        return False
+    return any(keyword in cleaned for keyword in QUOTE_ROLE_KEYWORDS)
 
+
+def _filter_quote_reps(reps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    for rep in reps:
+        email = _clean_rep_email(rep.get("email_address"))
+        role = rep.get("role")
+
+        if not _is_allowed_rep_email(email):
+            continue
+        if not _role_matches_quote(role):
+            continue
+        if email in seen:
+            continue
+
+        seen.add(email)
+        out.append(rep)
+
+    return out
+
+
+def _format_address(*parts: Any) -> str:
+    return ", ".join(
+        str(p).strip()
+        for p in parts
+        if str(p or "").strip()
+    )
+
+
+def _normalize_contact(rep: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    if not rep:
+        return {
+            "contact_name": "",
+            "contact_email": "",
+            "contact_phone": "",
+        }
+
+    return {
+        "contact_name": str(rep.get("full_name") or "").strip(),
+        "contact_email": str(rep.get("email_address") or "").strip(),
+        "contact_phone": str(rep.get("phone_mobile") or "").strip(),
+    }
+
+
+def get_proposal_by_opportunity_number(opportunity_number: str) -> Optional[Dict[str, Any]]:
+    opportunity_number = (opportunity_number or "").strip()
+    if not opportunity_number:
+        return None
+
+    tenant_id = _get_tenant_id()
+
+    sql = """
+    SELECT
+        ot.OPPORTUNITY_NUMBER,
+        ot.OWNER_NAME,
+
+        ot.CUSTOMER_ID,
+        ot.CUSTOMER_NAME,
+
+        c.BILLING_ADDRESS_LINE1,
+        c.BILLING_CITY,
+        c.BILLING_STATE,
+        c.BILLING_POSTAL_CODE,
+
+        COALESCE(p.ID, ot.PROPERTY_LIST) AS PROPERTY_ID,
+        p.NAME AS PROPERTY_NAME,
+        p.ADDRESS_LINE1 AS PROPERTY_ADDRESS_LINE1,
+        p.CITY AS PROPERTY_CITY,
+        p.STATE AS PROPERTY_STATE,
+        p.POSTAL_CODE AS PROPERTY_POSTAL_CODE
+
+    FROM BUILDOPS_OPERATIONAL_DATA.SHARE.OPPORTUNITY_TOTALS ot
+
+    LEFT JOIN BUILDOPS_OPERATIONAL_DATA.SHARE.CUSTOMER c
+        ON c.ID = ot.CUSTOMER_ID
+       AND c.TENANT_ID = %s
+       AND c.IS_DELETED = FALSE
+
+    LEFT JOIN BUILDOPS_OPERATIONAL_DATA.SHARE.PROPERTY p
+        ON p.ID = ot.PROPERTY_LIST
+       AND p.TENANT_ID = %s
+       AND p.IS_DELETED = FALSE
+
+    WHERE ot.IS_DELETED = FALSE
+      AND ot.TENANT_ID = %s
+      AND ot.OPPORTUNITY_NUMBER = %s
+
+    LIMIT 1
+    """
+
+    rows = _execute_query(sql, (tenant_id, tenant_id, tenant_id, opportunity_number))
+    if not rows:
+        return None
+
+    row = rows[0]
+
+    customer_id = str(row.get("customer_id") or "").strip()
+    property_id = str(row.get("property_id") or "").strip()
+
+    customer_name = str(row.get("customer_name") or "").strip()
+    customer_address = _format_address(
+        row.get("billing_address_line1"),
+        row.get("billing_city"),
+        row.get("billing_state"),
+        row.get("billing_postal_code"),
+    )
+
+    property_name = str(row.get("property_name") or "").strip()
+    property_address = _format_address(
+        row.get("property_address_line1"),
+        row.get("property_city"),
+        row.get("property_state"),
+        row.get("property_postal_code"),
+    )
+
+    # If no real property data, fallback to customer.
+    if not property_name:
+        property_name = customer_name
+    if not property_address:
+        property_address = customer_address
+    if property_name == customer_name and property_address == customer_address:
+        property_id = property_id or ""
+
+    property_quote_reps: List[Dict[str, Any]] = []
+    customer_quote_reps: List[Dict[str, Any]] = []
+
+    if property_id:
+        property_quote_reps = _filter_quote_reps(get_property_representatives(property_id))
+
+    if customer_id:
+        customer_quote_reps = _filter_quote_reps(get_customer_representatives(customer_id))
+
+    selected_source = "manual"
+    selected_rep: Optional[Dict[str, Any]] = None
+    all_send_contacts: List[Dict[str, Any]] = []
+
+    if property_quote_reps:
+        selected_source = "property"
+        selected_rep = property_quote_reps[0]
+        all_send_contacts = property_quote_reps
+    elif customer_quote_reps:
+        selected_source = "customer"
+        selected_rep = customer_quote_reps[0]
+        all_send_contacts = customer_quote_reps
+
+    contact = _normalize_contact(selected_rep)
+
+    return {
+        "proposal_number": str(row.get("opportunity_number") or "").strip(),
+        "proposal_date": "",
+
+        "prepared_by": str(row.get("owner_name") or "").strip(),
+
+        "customer_id": customer_id,
+        "customer_name": customer_name,
+        "customer_address": customer_address,
+
+        "property_id": property_id,
+        "property_name": property_name,
+        "property_address": property_address,
+
+        **contact,
+
+        "contact_source": selected_source,
+        "proposal_send_contacts": all_send_contacts,
+        "property_quote_representatives": property_quote_reps,
+        "customer_quote_representatives": customer_quote_reps,
+    }
 # =========================================================
 # Existing invoice recipient helpers
 # =========================================================

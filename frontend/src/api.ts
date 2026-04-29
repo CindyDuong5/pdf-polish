@@ -321,6 +321,53 @@ export type SaveFinalProposalResponse = {
   customer_email?: string | null;
 };
 
+export type ProposalContact = {
+  representative_id?: string | null;
+  full_name?: string | null;
+
+  email_address?: string | null;
+  email?: string | null;
+
+  phone_mobile?: string | null;
+  phone_primary?: string | null;
+  phone_alternate?: string | null;
+
+  role?: string | null;
+  source?: string | null;
+  selected?: boolean;
+
+  [key: string]: any;
+};
+
+export type ProposalOpportunityLookupItem = {
+  proposal_number: string;
+  proposal_date?: string;
+
+  prepared_by: string;
+
+  customer_id: string;
+  customer_name: string;
+  customer_address: string;
+
+  property_id: string;
+  property_name: string;
+  property_address: string;
+
+  contact_name: string;
+  contact_email: string;
+  contact_phone: string;
+
+  contact_source?: string;
+  proposal_send_contacts?: ProposalContact[];
+  property_quote_representatives?: ProposalContact[];
+  customer_quote_representatives?: ProposalContact[];
+};
+
+export type ProposalOpportunityLookupResponse = {
+  ok: boolean;
+  item: ProposalOpportunityLookupItem;
+};
+
 /* ---------------- Generic document APIs ---------------- */
 
 export async function listDocuments(params: ListDocumentsParams) {
@@ -457,6 +504,16 @@ export async function searchProposalCustomers(
 
   return httpJson(
     `${API_BASE}/api/proposals/customers/search?${params.toString()}`
+  );
+}
+
+export async function getProposalOpportunity(
+  opportunityNumber: string
+): Promise<ProposalOpportunityLookupResponse> {
+  return httpJson(
+    `${API_BASE}/api/proposals/opportunity/${encodeURIComponent(
+      opportunityNumber.trim()
+    )}`
   );
 }
 

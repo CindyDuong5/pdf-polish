@@ -1,11 +1,10 @@
 // frontend/src/panels/proposal/ProposalPanel.tsx
+
 import { useEffect, useMemo, useState } from "react";
 import {
   buildProposal,
   getFields,
   getLinks,
-  getProposalProperties,
-  searchProposalCustomers,
   saveFinalProposal,
   sendEmail,
   friendlyErrorMessage,
@@ -13,11 +12,7 @@ import {
 import ProposalStaticForm from "../../components/ProposalStaticForm";
 import PreviewCard from "../../components/PreviewCard";
 import AdditionalDocumentsPanel from "../../components/AdditionalDocumentsPanel";
-import type {
-  ProposalCustomer,
-  ProposalProperty,
-  ProposalStaticFields,
-} from "../../types";
+import type { ProposalContact, ProposalStaticFields } from "../../types";
 
 type Links = {
   id?: string;
@@ -31,17 +26,15 @@ type Links = {
 type Props = {
   fields: ProposalStaticFields;
   onChange: (patch: Partial<ProposalStaticFields>) => void;
+  proposalContacts?: ProposalContact[];
 };
 
 function parseMoney(value: string | number | null | undefined): number | null {
   if (value == null) return null;
-
   const raw = String(value).trim();
   if (!raw) return null;
-
   const cleaned = raw.replace(/[^0-9.\-]/g, "");
   if (!cleaned) return null;
-
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
@@ -104,10 +97,9 @@ function normalizeProposalPayload(fields: ProposalStaticFields): ProposalStaticF
   );
 
   const manualSubtotal = parseMoney(fields.subtotal);
-  const effectiveSubtotal =
-    hasAnyNumericItemPrice
-      ? itemSubtotal
-      : (manualSubtotal ?? 0);
+  const effectiveSubtotal = hasAnyNumericItemPrice
+    ? itemSubtotal
+    : manualSubtotal ?? 0;
 
   const taxRate = parseMoney(fields.tax_rate) ?? 13;
   const tax = effectiveSubtotal * (taxRate / 100);
@@ -127,16 +119,46 @@ function normalizeProposalPayload(fields: ProposalStaticFields): ProposalStaticF
   };
 }
 
-export default function ProposalPanel({ fields, onChange }: Props) {
-  const [customerQuery, setCustomerQuery] = useState(fields.customer_name || "");
-  const [customerResults, setCustomerResults] = useState<ProposalCustomer[]>([]);
-  const [customerLoading, setCustomerLoading] = useState(false);
-  const [customerErr, setCustomerErr] = useState<string | null>(null);
+function parseEmails(input: string): string[] {
+  return input
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
-  const [properties, setProperties] = useState<ProposalProperty[]>([]);
-  const [propertiesLoading, setPropertiesLoading] = useState(false);
-  const [propertiesErr, setPropertiesErr] = useState<string | null>(null);
+function uniqueEmails(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
 
+  for (const value of values) {
+    const email = String(value || "").trim();
+    const key = email.toLowerCase();
+
+    if (!email || seen.has(key)) continue;
+
+    seen.add(key);
+    out.push(email);
+  }
+
+  return out;
+}
+
+function contactEmail(contact: any): string {
+  return String(
+    contact?.email_address ||
+      contact?.email ||
+      contact?.contact_email ||
+      contact?.CONTACT_EMAIL ||
+      contact?.EMAIL ||
+      ""
+  ).trim();
+}
+
+export default function ProposalPanel({
+  fields,
+  onChange,
+  proposalContacts = [],
+}: Props) {
   const [docId, setDocId] = useState("");
   const [links, setLinks] = useState<Links | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -155,6 +177,7 @@ export default function ProposalPanel({ fields, onChange }: Props) {
   const [bccInput, setBccInput] = useState("");
   const [subjectInput, setSubjectInput] = useState("");
   const [subjectDirty, setSubjectDirty] = useState(false);
+  const [ccDirty, setCcDirty] = useState(false);
 
   const draftUrl = links?.styled_draft?.url || null;
   const rawFinalUrl = links?.final?.url || null;
@@ -167,6 +190,21 @@ export default function ProposalPanel({ fields, onChange }: Props) {
     [fields.contact_email]
   );
 
+  const ccEmailsFromContacts = useMemo(() => {
+    const selectedEmail = toEmail.toLowerCase();
+
+    return uniqueEmails(
+      proposalContacts
+        .map((contact) => contactEmail(contact))
+        .filter((email) => email.toLowerCase() !== selectedEmail)
+    );
+  }, [proposalContacts, toEmail]);
+
+  useEffect(() => {
+    if (ccDirty) return;
+    setCcInput(ccEmailsFromContacts.join(", "));
+  }, [ccEmailsFromContacts, ccDirty]);
+
   function buildDefaultSubject(nextFields: ProposalStaticFields) {
     const proposalNumber = String(nextFields.proposal_number || "").trim();
     const propertyName = String(
@@ -176,37 +214,13 @@ export default function ProposalPanel({ fields, onChange }: Props) {
     if (proposalNumber && propertyName) {
       return `Proposal #${proposalNumber} - ${propertyName}`;
     }
+
     if (proposalNumber) {
       return `Proposal #${proposalNumber} - Please Review`;
     }
+
     return "Proposal - Please Review";
   }
-
-  useEffect(() => {
-    const q = customerQuery.trim();
-
-    if (q.length < 2) {
-      setCustomerResults([]);
-      setCustomerErr(null);
-      return;
-    }
-
-    const timer = window.setTimeout(async () => {
-      try {
-        setCustomerLoading(true);
-        setCustomerErr(null);
-        const res = await searchProposalCustomers(q, 20);
-        setCustomerResults(res.items || []);
-      } catch (e: any) {
-        setCustomerResults([]);
-        setCustomerErr(e?.message || "Customer search failed");
-      } finally {
-        setCustomerLoading(false);
-      }
-    }, 300);
-
-    return () => window.clearTimeout(timer);
-  }, [customerQuery]);
 
   useEffect(() => {
     if (subjectDirty) return;
@@ -217,86 +231,6 @@ export default function ProposalPanel({ fields, onChange }: Props) {
     fields.property_address,
     subjectDirty,
   ]);
-
-  function handleCustomerQueryChange(nextValue: string) {
-    setCustomerQuery(nextValue);
-
-    const selectedName = (fields.customer_name || "").trim();
-    const nextTrimmed = nextValue.trim();
-
-    if (fields.customer_id && nextTrimmed !== selectedName) {
-      onChange({
-        customer_id: "",
-        customer_name: nextValue,
-        customer_address: "",
-        property_id: "",
-        property_name: "",
-        property_address: "",
-      });
-
-      setProperties([]);
-      setPropertiesErr(null);
-    }
-  }
-
-  async function handleSelectCustomer(customer: ProposalCustomer) {
-    const customerName = customer.customer_name || "";
-    const contactPhone = customer.phone_primary || customer.phone_alternate || "";
-
-    setCustomerQuery(customerName);
-    setCustomerResults([]);
-
-    onChange({
-      customer_id: customer.customer_id,
-      customer_name: customerName,
-      customer_address: customer.full_address || customer.address || "",
-      property_id: "",
-      property_name: "",
-      property_address: "",
-      contact_name: "",
-      contact_email: customer.email || "",
-      contact_phone: contactPhone,
-    });
-
-    try {
-      setPropertiesLoading(true);
-      setPropertiesErr(null);
-      const res = await getProposalProperties(customer.customer_id);
-      setProperties(res.items || []);
-    } catch (e: any) {
-      setProperties([]);
-      setPropertiesErr(e?.message || "Property lookup failed");
-    } finally {
-      setPropertiesLoading(false);
-    }
-  }
-
-  function handleSelectProperty(propertyId: string) {
-    const property = properties.find((p) => p.property_id === propertyId);
-
-    if (!property) {
-      onChange({
-        property_id: "",
-        property_name: "",
-        property_address: "",
-      });
-      return;
-    }
-
-    onChange({
-      property_id: property.property_id,
-      property_name: property.property_name || "",
-      property_address:
-        property.property_full_address || property.property_address || "",
-    });
-  }
-
-  function parseEmails(input: string): string[] {
-    return input
-      .split(/[,;\n]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
 
   async function refreshLinks(nextDocId: string) {
     const res = await getLinks(nextDocId);
@@ -363,6 +297,7 @@ export default function ProposalPanel({ fields, onChange }: Props) {
       try {
         const f = await getFields(docId);
         const next = f?.final || f?.draft || null;
+
         if (next) {
           onChange(pickProposalFields(next));
         } else {
@@ -396,15 +331,18 @@ export default function ProposalPanel({ fields, onChange }: Props) {
     setSendErr(null);
 
     try {
+      const cc = parseEmails(ccInput).filter(
+        (email) => email.toLowerCase() !== toEmail.toLowerCase()
+      );
+
       await sendEmail(docId, {
         client_email: toEmail,
-        cc: parseEmails(ccInput),
+        cc,
         bcc: parseEmails(bccInput),
         subject: subjectInput.trim() || undefined,
       });
 
       setSendMsg("Email sent ✅");
-      setCcInput("");
       setBccInput("");
     } catch (e: any) {
       setSendErr(friendlyErrorMessage(e));
@@ -420,82 +358,6 @@ export default function ProposalPanel({ fields, onChange }: Props) {
 
       <div className="panelCard">
         <div className="sectionTitle">Proposal Builder</div>
-
-        <div
-          style={{
-            marginBottom: 18,
-            padding: 16,
-            border: "1px solid rgba(0,0,0,0.08)",
-            borderRadius: 14,
-            background: "#fff",
-          }}
-        >
-          <label className="label">Customer Search</label>
-          <input
-            className="input"
-            placeholder="Type customer name..."
-            value={customerQuery}
-            onChange={(e) => handleCustomerQueryChange(e.target.value)}
-          />
-
-          {customerLoading ? <div className="mutedSmall">Searching...</div> : null}
-          {customerErr ? <div className="alert err">{customerErr}</div> : null}
-
-          {customerResults.length > 0 ? (
-            <div className="proposalSearchResults">
-              {customerResults.map((c) => (
-                <button
-                  key={c.customer_id}
-                  type="button"
-                  className="proposalResultBtn"
-                  onClick={() => handleSelectCustomer(c)}
-                >
-                  <div style={{ fontWeight: 700 }}>{c.customer_name}</div>
-                  <div className="mutedSmall">{c.full_address || c.address || ""}</div>
-                  <div className="mutedSmall">{c.email || ""}</div>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div
-          style={{
-            marginBottom: 18,
-            padding: 16,
-            border: "1px solid rgba(0,0,0,0.08)",
-            borderRadius: 14,
-            background: "#fff",
-          }}
-        >
-          <label className="label">Property</label>
-          <select
-            className="input"
-            value={fields.property_id}
-            onChange={(e) => handleSelectProperty(e.target.value)}
-            disabled={!fields.customer_id || propertiesLoading}
-          >
-            <option value="">
-              {!fields.customer_id
-                ? "Select customer first..."
-                : propertiesLoading
-                ? "Loading properties..."
-                : "Select property..."}
-            </option>
-
-            {properties.map((p) => (
-              <option key={p.property_id} value={p.property_id}>
-                {p.property_name || "Unnamed Property"} -{" "}
-                {p.property_full_address || p.property_address || ""}
-              </option>
-            ))}
-          </select>
-
-          {propertiesLoading ? (
-            <div className="mutedSmall">Loading properties...</div>
-          ) : null}
-          {propertiesErr ? <div className="alert err">{propertiesErr}</div> : null}
-        </div>
 
         <ProposalStaticForm fields={fields} onChange={onChange} />
 
@@ -520,7 +382,9 @@ export default function ProposalPanel({ fields, onChange }: Props) {
         </div>
 
         <div className="mutedSmall" style={{ marginTop: 8 }}>
-          {docId ? `Document ID: ${docId}` : "Build Proposal first to create the document row."}
+          {docId
+            ? `Document ID: ${docId}`
+            : "Build Proposal first to create the document row."}
         </div>
       </div>
 
@@ -561,9 +425,17 @@ export default function ProposalPanel({ fields, onChange }: Props) {
               <input
                 className="input"
                 value={ccInput}
-                onChange={(e) => setCcInput(e.target.value)}
+                onChange={(e) => {
+                  setCcInput(e.target.value);
+                  setCcDirty(true);
+                }}
                 placeholder="cc1@email.com, cc2@email.com"
               />
+              {ccEmailsFromContacts.length > 0 ? (
+                <div className="mutedSmall" style={{ marginTop: 4 }}>
+                  Other proposal contacts are auto-filled here.
+                </div>
+              ) : null}
             </label>
 
             <label style={{ display: "block", marginBottom: 10 }}>

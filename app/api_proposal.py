@@ -15,6 +15,7 @@ from app.db import SessionLocal
 from app.services.snowflake import (
     search_active_customers_by_name,
     get_properties_for_customer,
+    get_proposal_by_opportunity_number,
 )
 from app.services.proposal_service import build_proposal_document
 from app.storage.s3_storage import get_storage
@@ -203,6 +204,33 @@ def api_get_customer_properties(customer_id: str):
         logger.exception("Property lookup failed")
         raise HTTPException(status_code=500, detail=f"Property lookup failed: {e}")
 
+@router.get("/opportunity/{opportunity_number}")
+def api_get_proposal_opportunity(opportunity_number: str):
+    opportunity_number = (opportunity_number or "").strip()
+    if not opportunity_number:
+        raise HTTPException(status_code=400, detail="opportunity_number is required")
+
+    try:
+        item = get_proposal_by_opportunity_number(opportunity_number)
+        if not item:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Opportunity #{opportunity_number} was not found",
+            )
+
+        return {
+            "ok": True,
+            "item": item,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Opportunity proposal lookup failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Opportunity proposal lookup failed: {e}",
+        )
 
 @router.post("/build")
 def api_build_proposal(payload: BuildProposalRequest):
@@ -212,13 +240,21 @@ def api_build_proposal(payload: BuildProposalRequest):
         raw_fields = payload.fields.model_dump()
         fields = _normalize_proposal_fields(raw_fields)
 
+        proposal_number = str(fields.get("proposal_number") or "").strip()
+
+        if not proposal_number:
+            raise HTTPException(
+                status_code=400,
+                detail="Proposal number is required. Please load an opportunity first.",
+            )
+        
         pdf_bytes = build_proposal_document(fields)
 
         doc_id = str(uuid4())
         draft_key = _styled_draft_key_for(doc_id)
         storage.upload_pdf_bytes(draft_key, pdf_bytes)
 
-        proposal_number = str(fields.get("proposal_number") or "").strip() or None
+        proposal_number = proposal_number or None
         customer_name = str(fields.get("customer_name") or "").strip() or None
         customer_email = str(fields.get("contact_email") or "").strip() or None
         property_address = str(fields.get("property_address") or "").strip() or None
@@ -289,5 +325,11 @@ def api_build_proposal(payload: BuildProposalRequest):
             "fields": fields,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Proposal build failed: {type(e).__name__}: {e}")
+        logger.exception("Proposal build failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Proposal build failed: {type(e).__name__}: {e}",
+        )

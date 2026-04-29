@@ -24,7 +24,16 @@ def safe_text(value: Any) -> str:
 
 
 def prepared_by_key(prepared_by: Any) -> str:
-    return normalize_key(prepared_by).split()[0] if safe_text(prepared_by) else ""
+    text = normalize_key(prepared_by)
+    if not text:
+        return ""
+
+    first = text.split()[0]
+
+    if first == "nikola":
+        return "nick"
+
+    return first
 
 
 def proposal_type_key(proposal_type: Any) -> str:

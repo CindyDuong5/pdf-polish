@@ -1,17 +1,14 @@
 # scripts/test_snowflake.py
+# scripts/test_snowflake.py
 from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.services.snowflake import (
     get_snowflake_connection,
-    get_property_representatives,
-    get_customer_representatives,
-    get_property_rep_email_suggestion,
-    get_customer_rep_email_suggestion,
-    resolve_invoice_recipient_suggestion,
+    get_proposal_by_opportunity_number,
 )
 
 
@@ -56,137 +53,64 @@ def test_connection() -> None:
         conn.close()
 
 
-def summarize_reps(label: str, reps: List[Dict[str, Any]]) -> None:
-    print(f"{label}: {len(reps)} rep(s)")
-    if not reps:
-        print("  No rows returned.")
-        return
+def test_proposal_lookup(opportunity_number: str) -> dict:
+    print(f"Testing proposal lookup for opportunity_number={opportunity_number!r}...")
 
-    for i, rep in enumerate(reps, start=1):
-        print(
-            f"  {i}. "
-            f"name={rep.get('full_name')!r}, "
-            f"email={rep.get('email_address')!r}, "
-            f"role={rep.get('role')!r}"
+    item = get_proposal_by_opportunity_number(opportunity_number)
+    if not item:
+        raise RuntimeError(f"No opportunity found for {opportunity_number!r}")
+
+    _print_json("Proposal lookup result:", item)
+
+    required_fields = [
+        "proposal_number",
+        "prepared_by",
+        "customer_id",
+        "customer_name",
+        "customer_address",
+        "property_id",
+        "property_name",
+        "property_address",
+        "contact_name",
+        "contact_email",
+        "contact_phone",
+    ]
+
+    missing = [key for key in required_fields if key not in item]
+    if missing:
+        raise RuntimeError(f"Missing keys from proposal lookup: {missing}")
+
+    if str(item["proposal_number"]).strip() != opportunity_number.strip():
+        raise RuntimeError(
+            f"Expected proposal_number to equal opportunity_number. "
+            f"Got {item['proposal_number']!r}"
         )
 
-
-def test_property_representatives(property_id: str) -> None:
-    print(f"Testing property representatives for property_id={property_id!r}...")
-    reps = get_property_representatives(property_id)
-    print("Property representatives query OK")
-    summarize_reps("Property reps", reps)
-    _print_json("Property rep raw payload:", reps)
-
-
-def test_customer_representatives(customer_id: str) -> None:
-    print(f"Testing customer representatives for customer_id={customer_id!r}...")
-    reps = get_customer_representatives(customer_id)
-    print("Customer representatives query OK")
-    summarize_reps("Customer reps", reps)
-    _print_json("Customer rep raw payload:", reps)
-
-
-def test_property_rep_email_suggestion(property_id: str) -> None:
-    print(f"Testing property billing-contact suggestion for property_id={property_id!r}...")
-    suggestion = get_property_rep_email_suggestion(property_id)
-    print("Property billing suggestion OK")
-    _print_json("Property billing suggestion:", suggestion)
-
-
-def test_customer_rep_email_suggestion(customer_id: str) -> None:
-    print(f"Testing customer billing-contact suggestion for customer_id={customer_id!r}...")
-    suggestion = get_customer_rep_email_suggestion(customer_id)
-    print("Customer billing suggestion OK")
-    _print_json("Customer billing suggestion:", suggestion)
-
-
-def test_resolve_invoice_recipient_suggestion(
-    property_id: Optional[str],
-    customer_id: Optional[str],
-) -> None:
-    print(
-        "Testing final invoice recipient resolution "
-        f"(property_id={property_id!r}, customer_id={customer_id!r})..."
-    )
-    result = resolve_invoice_recipient_suggestion(
-        property_id=property_id,
-        customer_id=customer_id,
-        primary_email=None,
-    )
-    print("Final invoice recipient resolution OK")
-    _print_json("Resolved invoice recipient:", result)
+    print("Proposal lookup OK")
+    return item
 
 
 def main() -> None:
-    property_id = sys.argv[1] if len(sys.argv) > 1 else ""
-    customer_id = sys.argv[2] if len(sys.argv) > 2 else ""
+    opportunity_number = sys.argv[1] if len(sys.argv) > 1 else ""
 
-    print("=" * 80)
-    print("SNOWFLAKE REPRESENTATIVE TEST")
-    print(f"property_id = {property_id!r}")
-    print(f"customer_id = {customer_id!r}")
-    print("=" * 80)
-
-    try:
-        test_connection()
-    except Exception as e:
-        print("FAILED: connection test")
-        print(f"Error: {e}")
+    if not opportunity_number:
+        print("Usage:")
+        print("  python -m scripts.test_snowflake <opportunity_number>")
         return
 
     print("=" * 80)
+    print("SNOWFLAKE PROPOSAL LOOKUP TEST")
+    print(f"opportunity_number = {opportunity_number!r}")
+    print("=" * 80)
 
-    if property_id:
-        try:
-            test_property_representatives(property_id)
-        except Exception as e:
-            print("FAILED: get_property_representatives")
-            print(f"Error: {e}")
-            return
-
-        print("=" * 80)
-
-        try:
-            test_property_rep_email_suggestion(property_id)
-        except Exception as e:
-            print("FAILED: get_property_rep_email_suggestion")
-            print(f"Error: {e}")
-            return
-
-        print("=" * 80)
-
-    if customer_id:
-        try:
-            test_customer_representatives(customer_id)
-        except Exception as e:
-            print("FAILED: get_customer_representatives")
-            print(f"Error: {e}")
-            return
-
-        print("=" * 80)
-
-        try:
-            test_customer_rep_email_suggestion(customer_id)
-        except Exception as e:
-            print("FAILED: get_customer_rep_email_suggestion")
-            print(f"Error: {e}")
-            return
-
-        print("=" * 80)
-
-    try:
-        test_resolve_invoice_recipient_suggestion(
-            property_id=property_id or None,
-            customer_id=customer_id or None,
-        )
-    except Exception as e:
-        print("FAILED: resolve_invoice_recipient_suggestion")
-        print(f"Error: {e}")
-        return
+    test_connection()
 
     print("=" * 80)
-    print("Representative Snowflake tests passed.")
+
+    test_proposal_lookup(opportunity_number)
+
+    print("=" * 80)
+    print("Snowflake proposal lookup test passed.")
 
 
 if __name__ == "__main__":
