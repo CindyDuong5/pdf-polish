@@ -60,12 +60,47 @@ export default function InvoicePanel(props: {
   }
 
   function getDefaultTo(next: InvoiceFields | null) {
-    return (next?.invoice_recipient_to || "").trim();
+    return (
+      next?.invoice_recipient_to ||
+      next?.property_rep_to ||
+      ""
+    ).trim();
   }
 
-  function getDefaultCc(next: InvoiceFields | null) {
-    return (next?.invoice_recipient_cc || []).join(", ");
+  function uniqueEmails(items: any[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const item of items || []) {
+    const email = String(item || "").trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    out.push(email);
   }
+
+  return out;
+}
+
+function getDefaultCc(next: InvoiceFields | null) {
+  const to = String(
+    next?.invoice_recipient_to ||
+      next?.property_rep_to ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const cc = uniqueEmails([
+    ...(next?.invoice_recipient_cc || []),
+    ...(next?.property_rep_cc || []),
+    ...(next?.customer_rep_cc || []),
+    ...(next?.invoice_recipient_all_emails || []),
+    ...(next?.property_rep_all_emails || []),
+    ...(next?.customer_rep_all_emails || []),
+  ]);
+
+  return cc.filter((email) => email !== to).join(", ");
+}
 
   useEffect(() => {
     let alive = true;
@@ -115,7 +150,17 @@ export default function InvoicePanel(props: {
 
   useEffect(() => {
     setCcInput(getDefaultCc(fields));
-  }, [fields?.invoice_recipient_cc, props.selectedId]);
+  }, [
+    fields?.invoice_recipient_cc,
+    fields?.property_rep_cc,
+    fields?.customer_rep_cc,
+    fields?.invoice_recipient_all_emails,
+    fields?.property_rep_all_emails,
+    fields?.customer_rep_all_emails,
+    fields?.invoice_recipient_to,
+    fields?.property_rep_to,
+    props.selectedId,
+  ]);
 
   const paymentUrl = useMemo(() => {
     return (fields as any)?.payment_url || "";
