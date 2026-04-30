@@ -27,6 +27,7 @@ type Props = {
   fields: ProposalStaticFields;
   onChange: (patch: Partial<ProposalStaticFields>) => void;
   proposalContacts?: ProposalContact[];
+  onClear?: () => void;
 };
 
 function parseMoney(value: string | number | null | undefined): number | null {
@@ -158,6 +159,7 @@ export default function ProposalPanel({
   fields,
   onChange,
   proposalContacts = [],
+  onClear,
 }: Props) {
   const [docId, setDocId] = useState("");
   const [links, setLinks] = useState<Links | null>(null);
@@ -236,6 +238,25 @@ export default function ProposalPanel({
     const res = await getLinks(nextDocId);
     setLinks(res);
     setReloadKey((n) => n + 1);
+  }
+
+  function handleClear() {
+    setDocId("");
+    setLinks(null);
+    setReloadKey((n) => n + 1);
+
+    setMsg(null);
+    setErr(null);
+    setSendMsg(null);
+    setSendErr(null);
+
+    setCcInput("");
+    setBccInput("");
+    setSubjectInput("");
+    setSubjectDirty(false);
+    setCcDirty(false);
+
+    onClear?.();
   }
 
   async function onBuildProposal() {
@@ -369,6 +390,15 @@ export default function ProposalPanel({
             disabled={building || saving || sending}
           >
             {building ? "Building..." : "Build Proposal"}
+          </button>
+
+          <button
+            className="btn"
+            type="button"
+            onClick={handleClear}
+            disabled={building || saving || sending}
+          >
+            Clear
           </button>
 
           <button

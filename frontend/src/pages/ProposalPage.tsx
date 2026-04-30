@@ -1,4 +1,5 @@
 // frontend/src/pages/ProposalPage.tsx
+
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getProposalOpportunity, friendlyErrorMessage } from "../api";
@@ -22,6 +23,88 @@ const DEFAULT_SCOPE_SUMMARY = `Complete the Following Fire & Life Safety Inspect
 
 const DEFAULT_EXCLUSIONS = `- Job to be completed during regular hours 08:00-16:30 Monday to Friday
 - Pricing is subject to parts availability and all items being done concurrently`;
+
+const DEFAULT_ITEMS_BY_TYPE: Record<string, ProposalItem[]> = {
+  Inspection: [
+    {
+      item: "Monthly / Bi-Monthly",
+      description: `• Fire Alarm
+• Fire Sprinkler
+• Fire Pump
+• Emergency Lighting
+• Fire Extinguishers
+• Fire Hose`,
+      price: "",
+    },
+    {
+      item: "Quarterly",
+      description: `• Fire Sprinkler
+• Fire Drill
+• Elevator Recall
+• Smoke Control`,
+      price: "",
+    },
+    {
+      item: "Annual",
+      description: `• Fire Alarm w/ End of Line Resistor Verification
+• Fire Sprinkler w/ Drum Drip Maintenance
+• Fire Pump
+• Emergency Lighting
+• Fire Extinguishers
+• Fire Hose
+• Smoke Control
+• Elevator Fire Recall
+• Backflow Test w/ Forward Flow (3 Total)`,
+      price: "",
+    },
+    {
+      item: "Optional: Annual Building Audit & Fire Protection Forecasting Plan",
+      description: `• A comprehensive review of all fire and life safety systems, including current condition, upcoming requirements, and a forward-looking schedule to help plan repairs, upgrades, and budgeting.
+• Cost TBD.`,
+      price: "TBD",
+    },
+    {
+      item: "Optional: Custom-Branded Fire Extinguishers (Site-Specific Labeling)",
+      description: `• Supply of fire extinguishers with customized labeling and identification tailored to your building, providing a clean, consistent look while maintaining full code compliance.
+• Cost TBD.`,
+      price: "TBD",
+    },
+    {
+      item: "Optional: Custom-Built Fire Inspection Log Books (Site-Specific & Fully Tailored)",
+      description: `• Designed and printed specifically for your building, with all fire and life safety systems pre-structured for accurate, organized, and compliant record keeping.
+• Cost TBD.`,
+      price: "TBD",
+    },
+  ],
+
+  // Later you can add:
+  // Service: [...],
+  // Project: [...],
+};
+
+function isEmptyItem(row: ProposalItem): boolean {
+  return (
+    !String(row.item || "").trim() &&
+    !String(row.description || "").trim() &&
+    !String(row.price || "").trim()
+  );
+}
+
+function shouldApplyDefaultItems(items: ProposalItem[] | undefined): boolean {
+  if (!items || items.length === 0) return true;
+  return items.every(isEmptyItem);
+}
+
+function getDefaultItemsForType(proposalType: string): ProposalItem[] | null {
+  const defaults = DEFAULT_ITEMS_BY_TYPE[proposalType];
+  if (!defaults) return null;
+
+  return defaults.map((row) => ({
+    item: row.item,
+    description: row.description,
+    price: row.price,
+  }));
+}
 
 function parseMoney(value: string | number | null | undefined): number | null {
   if (value == null) return null;
@@ -163,7 +246,22 @@ export default function ProposalPage() {
   const [proposalContacts, setProposalContacts] = useState<ProposalContact[]>([]);
 
   function patchFields(patch: Partial<ProposalStaticFields>) {
-    setFields((prev) => calculateDerivedFields({ ...prev, ...patch }));
+    setFields((prev) => {
+      const next: ProposalStaticFields = { ...prev, ...patch };
+
+      if (
+        patch.proposal_type &&
+        patch.proposal_type !== prev.proposal_type &&
+        shouldApplyDefaultItems(prev.items)
+      ) {
+        const defaultItems = getDefaultItemsForType(patch.proposal_type);
+        if (defaultItems) {
+          next.items = defaultItems;
+        }
+      }
+
+      return calculateDerivedFields(next);
+    });
   }
 
   function applySelectedContact(contact: ProposalContact) {
@@ -218,27 +316,24 @@ export default function ProposalPage() {
 
       if (!hasPropertyId) {
         notices.push(
-          "No property id found. Customer information was used as the property information. You can manually change it if needed."
+          "No property was found for this opportunity. We used the customer info as the property. You can update it if needed."
         );
       }
 
       const contacts = getAllProposalContacts(item);
-      const source = item.contact_source || "manual";
 
       setProposalContacts(contacts);
 
       if (contacts.length === 0) {
         notices.push(
-          "No quote/all/proposal contact found from property or customer representatives. Please manually enter the Prepared For contact."
+          "We couldn’t find any contact for this proposal. Please enter the contact details manually."
         );
       } else if (contacts.length === 1) {
-        notices.push(
-          `Contact found from ${source} representative and selected automatically.`
-        );
+        notices.push("We found one contact and selected it for you.");
         applySelectedContact(contacts[0]);
       } else {
         notices.push(
-          `${contacts.length} contacts found. One contact will be used to build the proposal. The other contacts will be added to CC when sending.`
+          `${contacts.length} contacts found. Choose one for the proposal. The others will be included in CC when sending the email.`
         );
       }
 
@@ -249,6 +344,15 @@ export default function ProposalPage() {
     } finally {
       setLoadingOpportunity(false);
     }
+  }
+
+  function onClearAll() {
+    setFields(buildInitialFields());
+    setOpportunityNumber("");
+    setLookupMsg(null);
+    setLookupErr(null);
+    setLookupNotices([]);
+    setProposalContacts([]);
   }
 
   return (
@@ -342,9 +446,12 @@ export default function ProposalPage() {
             <div className="proposalContactBox">
               <div className="proposalContactHeader">
                 <div>
-                  <div className="proposalContactTitle">Select Proposal Contact</div>
+                  <div className="proposalContactTitle">
+                    Select Proposal Contact
+                  </div>
                   <div className="proposalContactSub">
-                    Selected contact is used for the proposal. Other contacts are added to CC.
+                    Selected contact is used for the proposal. Other contacts
+                    are added to CC.
                   </div>
                 </div>
               </div>
@@ -360,7 +467,9 @@ export default function ProposalPage() {
                     <button
                       key={`${email || contact.full_name || "contact"}-${index}`}
                       type="button"
-                      className={`proposalContactOption ${selected ? "selected" : ""}`}
+                      className={`proposalContactOption ${
+                        selected ? "selected" : ""
+                      }`}
                       onClick={() => applySelectedContact(contact)}
                     >
                       <div className="proposalContactMain">
@@ -368,7 +477,9 @@ export default function ProposalPage() {
                           {contact.full_name || "Unnamed Contact"}
                         </div>
                         {selected ? (
-                          <span className="proposalSelectedBadge">Selected</span>
+                          <span className="proposalSelectedBadge">
+                            Selected
+                          </span>
                         ) : null}
                       </div>
 
@@ -394,6 +505,7 @@ export default function ProposalPage() {
           fields={fields}
           onChange={patchFields}
           proposalContacts={proposalContacts}
+          onClear={onClearAll}
         />
 
         <div className="panelCard" style={{ marginTop: 16 }}>
