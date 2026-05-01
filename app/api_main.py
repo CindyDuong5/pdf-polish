@@ -9,12 +9,13 @@ from pathlib import Path
 from typing import Literal, List, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query, UploadFile, File, Form
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
 
 from app.db import SessionLocal
-from app.email.smtp_sender import EmailAttachment, send_email_brevo_smtp
+from app.email.smtp_sender import send_email_brevo_smtp
 from app.email.template_router import build_subject, email_kind_for, render_html, template_for_kind
 from app.security.quote_response_token import make_token, verify_token
 from app.services.document_fields import get_fields, set_final
@@ -27,7 +28,7 @@ from app.services.additional_documents import (
     create_uploaded_additional_document,
     create_url_additional_document,
     delete_additional_document,
-    build_additional_email_attachments,
+    build_additional_document_links,
 )
 
 from app.api_proposal import _normalize_proposal_fields
@@ -1037,6 +1038,40 @@ def _get_buildops_invoice_id(rowd: dict) -> str | None:
     inv_id = (overrides.get("buildops_invoice_id") or extracted.get("buildops_invoice_id") or "").strip()
     return inv_id or None
 
+@app.get("/api/documents/{doc_id}/additional-documents/{additional_doc_id}/download")
+def api_download_additional_document(doc_id: str, additional_doc_id: str):
+    storage = get_storage()
+
+    with SessionLocal() as db:
+        row = db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    document_id,
+                    storage_key
+                FROM public.document_additional_documents
+                WHERE id = :additional_doc_id
+                  AND document_id = :doc_id
+                """
+            ),
+            {
+                "doc_id": doc_id,
+                "additional_doc_id": additional_doc_id,
+            },
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Additional document not found")
+
+        storage_key = row["storage_key"]
+
+    try:
+        url = storage.presigned_url(storage_key)
+    except AttributeError:
+        url = storage.generate_presigned_url(storage_key)
+
+    return RedirectResponse(url)
 
 @app.post("/api/documents/{doc_id}/send-email")
 def send_email_any(doc_id: str, body: SendEmailIn):
@@ -1095,13 +1130,17 @@ def send_email_any(doc_id: str, body: SendEmailIn):
         label = rowd["invoice_number"] or rowd["quote_number"] or rowd["job_report_number"] or rowd["id"]
         filename = f"{rowd['doc_type']}_{label}.pdf"
 
-        file_url = storage.public_url(final_key)
-        pdf_bytes = storage.download_bytes(final_key)
-                
+        file_url = storage.public_url(final_key)            
 
         additional_docs = list_additional_documents(db, real_doc_id)
-        additional_attachments = build_additional_email_attachments(db, storage, real_doc_id)
-        additional_document_names = [str(x.get("display_name") or "").strip() for x in additional_docs if str(x.get("display_name") or "").strip()]
+
+        additional_docs_base = os.getenv("ADDITIONAL_DOCS_CLOUDFRONT_BASE_URL", "").rstrip("/")
+
+        additional_document_links = build_additional_document_links(
+            additional_docs,
+            additional_docs_base,
+        )
+        additional_document_names = [x["name"] for x in additional_document_links]
 
         customer_name = (rowd.get("customer_name") or "").strip()
         greeting = f"Good day {customer_name}," if customer_name else "Good day,"
@@ -1173,6 +1212,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "approve_url": approve_url,
                 "reject_url": reject_url,
                 "additional_document_names": additional_document_names,
+                "additional_document_links": additional_document_links,
                 "now": "",
             }
 
@@ -1184,10 +1224,10 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 f"View {doc_word}: {file_url}\n\n"
             )
 
-            if additional_document_names:
+            if additional_document_links:
                 text_body += "Additional Documents:\n"
-                for name in additional_document_names:
-                    text_body += f"- {name}\n"
+                for item in additional_document_links:
+                    text_body += f"- {item['name']}: {item['url']}\n"
                 text_body += "\n"
 
             text_body += (
@@ -1214,6 +1254,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 "approve_url": None,
                 "reject_url": None,
                 "additional_document_names": additional_document_names,
+                "additional_document_links": additional_document_links,
             }
 
             html_body = render_html(template_name, context)
@@ -1223,10 +1264,10 @@ def send_email_any(doc_id: str, body: SendEmailIn):
                 f"Please find the document attached.\n"
                 f"Link: {file_url}\n\n"
             )
-            if additional_document_names:
+            if additional_document_links:
                 text_body += "Additional Documents:\n"
-                for name in additional_document_names:
-                    text_body += f"- {name}\n"
+                for item in additional_document_links:
+                    text_body += f"- {item['name']}: {item['url']}\n"
                 text_body += "\n"
 
             if payment_url:
@@ -1239,8 +1280,8 @@ def send_email_any(doc_id: str, body: SendEmailIn):
 
         if reviewable:
             email_from = os.getenv(
-                "QUOTE_EMAIL_FROM",
-                "Mainline Fire Protection Sales <sales@mainlinefire.com>",
+                "EMAIL_FROM",
+                "Mainline Fire Protection <support@mainlinefire.com>",
             )
             email_reply_to = os.getenv(
                 "QUOTE_EMAIL_REPLY_TO",
@@ -1263,14 +1304,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             text_body=text_body,
             cc_emails=cc_list,
             bcc_emails=bcc_list,
-            attachments=[
-                EmailAttachment(
-                    filename=filename,
-                    content_type="application/pdf",
-                    data=pdf_bytes,
-                ),
-                *additional_attachments,
-            ],
+            attachments=[],
             from_value=email_from,
             reply_to=email_reply_to,
         )

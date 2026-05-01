@@ -93,7 +93,7 @@
                 <td style="width:50%;vertical-align:top;padding-right:8px;">
                   {% if approve_url %}
                   <a href="{{ approve_url }}" target="_blank" rel="noopener noreferrer"
-                    style="display:inline-block;width:100%;text-align:center;background:#DA5B38;;;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
+                    style="display:inline-block;width:100%;text-align:center;background:#DA5B38;color:#fff;text-decoration:none;font-weight:800;padding:14px 0;border-radius:10px;">
                     Approve
                   </a>
                   {% endif %}
@@ -119,12 +119,16 @@
             <!-- Support -->
             <div style="margin:18px 0 10px 0;padding:14px 16px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:10px;font-size:14px;color:#374151;">
 
-              {% if additional_document_names and additional_document_names|length > 0 %}
+              {% if additional_document_links and additional_document_links|length > 0 %}
               <div style="margin-bottom:10px;">
                 <strong>Additional Documents:</strong>
                 <ul style="margin:6px 0 0 18px;padding:0;">
-                  {% for name in additional_document_names %}
-                  <li style="margin:4px 0;">{{ name }}</li>
+                  {% for item in additional_document_links %}
+                  <li style="margin:4px 0;">
+                    <a href="{{ item.url }}" target="_blank" style="color:#2563eb;text-decoration:underline;">
+                      {{ item.name }}
+                    </a>
+                  </li>
                   {% endfor %}
                 </ul>
               </div>

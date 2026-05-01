@@ -391,3 +391,36 @@ def build_additional_email_attachments(db: Session, storage, doc_id: str) -> lis
         )
 
     return attachments
+
+def build_additional_document_links(
+    rows: list[dict[str, Any]],
+    cloudfront_base_url: str,
+) -> list[dict[str, str]]:
+    links: list[dict[str, str]] = []
+
+    base_url = (cloudfront_base_url or "").rstrip("/")
+    if not base_url:
+        return links
+
+    for row in rows or []:
+        storage_key = row.get("storage_key")
+        if not storage_key:
+            continue
+
+        name = str(
+            row.get("display_name")
+            or row.get("original_filename")
+            or "Document"
+        ).strip()
+
+        # 🔥 IMPORTANT: remove prefix
+        relative_key = storage_key.replace("additional_documents/", "", 1)
+
+        links.append(
+            {
+                "name": name,
+                "url": f"{base_url}/{relative_key}",
+            }
+        )
+
+    return links

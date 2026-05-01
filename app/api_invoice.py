@@ -15,7 +15,7 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.storage.s3_storage import get_storage
 from app.buildops_client import BuildOpsClient
-from app.email.smtp_sender import send_email_brevo_smtp, EmailAttachment
+from app.email.smtp_sender import send_email_brevo_smtp
 from app.email.template_router import (
     email_kind_for,
     template_for_kind,
@@ -25,7 +25,7 @@ from app.email.template_router import (
 from app.services.payment_link import get_invoice_payment_link
 from app.services.additional_documents import (
     list_additional_documents,
-    build_additional_email_attachments,
+    build_additional_document_links,
 )
 from app.services.snowflake import resolve_invoice_recipient_suggestion
 from app.styling.invoice.build_data import build_invoice_pdf_data_from_number
@@ -721,21 +721,14 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
         view_url = storage.public_url(final_key)
 
-        try:
-            pdf_bytes = storage.download_bytes(final_key)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to download PDF for attachment: {e}",
-            )
-
         additional_docs = list_additional_documents(db, doc_id)
-        additional_attachments = build_additional_email_attachments(db, storage, doc_id)
-        additional_document_names = [
-            str(x.get("display_name") or "").strip()
-            for x in additional_docs
-            if str(x.get("display_name") or "").strip()
-        ]
+        additional_docs_base = os.getenv("ADDITIONAL_DOCS_CLOUDFRONT_BASE_URL", "").rstrip("/")
+
+        additional_document_links = build_additional_document_links(
+            additional_docs,
+            additional_docs_base,
+        )
+        additional_document_names = [x["name"] for x in additional_document_links]
 
         kind = email_kind_for("INVOICE")
         tpl = template_for_kind(kind)
@@ -752,6 +745,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 "view_url": view_url,
                 "payment_url": payment_url or "",
                 "additional_document_names": additional_document_names,
+                "additional_document_links": additional_document_links,
             },
         )
 
@@ -759,8 +753,8 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
 
         if additional_document_names:
             text_body += "\nAdditional Documents:\n"
-            for name in additional_document_names:
-                text_body += f"- {name}\n"
+            for item in additional_document_links:
+                text_body += f"- {item['name']}: {item['url']}\n"
 
         if payment_url:
             text_body += f"\nPay by Credit Card: {payment_url}\n"
@@ -772,14 +766,6 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
             text_body=text_body,
             cc_emails=cc,
             bcc_emails=bcc,
-            attachments=(
-                EmailAttachment(
-                    filename=f"Invoice-{invoice_number or doc_id}.pdf",
-                    content_type="application/pdf",
-                    data=pdf_bytes,
-                ),
-                *additional_attachments,
-            ),
             from_value=os.getenv(
                 "EMAIL_FROM",
                 "Mainline Fire Protection <support@mainlinefire.com>",
