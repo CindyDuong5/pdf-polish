@@ -75,3 +75,57 @@ export function getStatusClass(status: string): string {
       return "statusDraft";
   }
 }
+
+export function getDisplayEmailStatus(row: AnyDoc): string {
+  const label = String((row as any).email_status_label || "").trim();
+  if (label) return label;
+
+  const raw = String((row as any).email_status || "").toUpperCase().trim();
+
+  if (!raw) {
+    return row.sent_at ? "Sent - waiting for update" : "Not sent";
+  }
+
+  if (raw === "SENT") return "Sent";
+  if (raw === "DELIVERED") return "Delivered";
+  if (raw === "OPENED") return "Opened";
+  if (raw === "CLICKED") return "Clicked";
+
+  if (raw === "AUTO_OPENED") return "Auto-opened";
+  if (raw === "SOFT_BOUNCED") return "Temporary delivery issue";
+  if (raw === "HARD_BOUNCED") return "Failed - bad email address";
+  if (raw === "FAILED") return "Failed";
+  if (raw === "SPAM_COMPLAINT") return "Marked as spam";
+  if (raw === "UNSUBSCRIBED") return "Unsubscribed";
+
+  return raw;
+}
+
+export function getEmailStatusClass(row: AnyDoc): string {
+  const raw = String((row as any).email_status || "").toUpperCase().trim();
+
+  if (!raw) return row.sent_at ? "emailStatusPending" : "emailStatusNone";
+
+  switch (raw) {
+    case "DELIVERED":
+    case "OPENED":
+    case "CLICKED":
+      return "emailStatusGood";
+
+    case "SENT":
+    case "AUTO_OPENED":
+      return "emailStatusPending";
+
+    case "SOFT_BOUNCED":
+      return "emailStatusWarning";
+
+    case "HARD_BOUNCED":
+    case "FAILED":
+    case "SPAM_COMPLAINT":
+    case "UNSUBSCRIBED":
+      return "emailStatusBad";
+
+    default:
+      return "emailStatusPending";
+  }
+}

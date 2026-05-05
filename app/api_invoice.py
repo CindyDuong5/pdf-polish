@@ -774,6 +774,7 @@ def send_final_invoice_email(doc_id: str, body: SendInvoiceEmailIn):
                 "EMAIL_REPLY_TO",
                 "support@mainlinefire.com",
             ),
+            doc_id=doc_id,
         )
 
         sent_cc = ", ".join(cc) if cc else None

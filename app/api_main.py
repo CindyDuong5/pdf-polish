@@ -37,12 +37,14 @@ from app.storage.s3_storage import get_storage
 from app.styling.service_quote.renderer import render_service_quote
 from app.api_invoice import router as invoice_router
 from app.api_proposal import router as proposal_router
+from app.api_brevo_webhook import router as brevo_webhook_router
 from app.services.payment_link import get_invoice_payment_link
 
 app = FastAPI(title="PDF Polish API")
 
 app.include_router(invoice_router)
 app.include_router(proposal_router)
+app.include_router(brevo_webhook_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -184,18 +186,41 @@ def list_document_history(
     sql = text(
         f"""
         SELECT
-          id,
-          doc_type,
-          status,
-          invoice_number,
-          quote_number,
-          job_report_number,
-          final_s3_key,
-          created_at,
-          updated_at
-        FROM public.documents
-        {where_sql}
+        d.id,
+        d.doc_type,
+        d.status,
+        d.invoice_number,
+        d.quote_number,
+        d.job_report_number,
+        d.final_s3_key,
+        d.created_at,
+        d.updated_at,
+        d.sent_to,
+        d.sent_cc,
+        d.sent_bcc,
+        d.sent_at,
+
+        ee.event AS email_status,
+        ee.created_at AS email_status_at,
+        ee.mirror_link AS email_log_url,
+        ee.recipient_email AS email_status_recipient
+
+        FROM public.documents d
+
+        LEFT JOIN LATERAL (
+        SELECT
+            event,
+            created_at,
+            mirror_link,
+            recipient_email
+        FROM public.email_events
+        WHERE email_events.doc_id = d.id
         ORDER BY created_at DESC
+        LIMIT 1
+        ) ee ON true
+
+        {where_sql}
+        ORDER BY d.created_at DESC
         LIMIT :limit
         """
     )
@@ -232,6 +257,14 @@ def list_document_history(
                     "final_url": final_url,
                     "created_at": row.get("created_at"),
                     "updated_at": row.get("updated_at"),
+                    "sent_to": row.get("sent_to"),
+                    "sent_cc": row.get("sent_cc"),
+                    "sent_bcc": row.get("sent_bcc"),
+                    "sent_at": row.get("sent_at"),
+                    "email_status": row.get("email_status"),
+                    "email_status_at": row.get("email_status_at"),
+                    "email_log_url": row.get("email_log_url"),
+                    "email_status_recipient": row.get("email_status_recipient"),
                 }
             )
 
@@ -1307,6 +1340,7 @@ def send_email_any(doc_id: str, body: SendEmailIn):
             attachments=[],
             from_value=email_from,
             reply_to=email_reply_to,
+            doc_id=real_doc_id,
         )
 
         sent_cc = ", ".join(cc_list) if cc_list else None

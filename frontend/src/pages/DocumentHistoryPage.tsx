@@ -8,6 +8,8 @@ import {
   getDisplayStatus,
   getStatusClass,
   getDocTypeClass,
+  getDisplayEmailStatus,
+  getEmailStatusClass,
 } from "../uiLabels";
 import "../styles.css";
 
@@ -114,6 +116,7 @@ export default function DocumentHistoryPage() {
                   <th>Type</th>
                   <th>Number</th>
                   <th>Status</th>
+                  <th>Email Status</th>
                   <th>Updated</th>
                   <th>Final PDF</th>
                 </tr>
@@ -137,6 +140,19 @@ export default function DocumentHistoryPage() {
                           {displayStatus}
                         </span>
                       </td>
+                      <td>
+                        <span
+                          className={`historyStatusBadge ${getEmailStatusClass(row)}`}
+                        >
+                          {getDisplayEmailStatus(row)}
+                        </span>
+
+                        {row.email_status_at ? (
+                          <div className="mutedSmall">
+                            {formatDate(row.email_status_at)}
+                          </div>
+                        ) : null}
+                      </td>
                       <td>{formatDate(row.updated_at || row.created_at)}</td>
                       <td>
                         {row.final_url ? (
@@ -158,7 +174,7 @@ export default function DocumentHistoryPage() {
 
                 {!items.length ? (
                   <tr>
-                    <td colSpan={5}>
+                    <td colSpan={6}>
                       <div className="muted" style={{ padding: "12px 0" }}>
                         No documents found.
                       </div>

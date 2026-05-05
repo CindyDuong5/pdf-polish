@@ -55,6 +55,7 @@ def send_email_brevo_smtp(
     attachments: Sequence[EmailAttachment] = (),
     from_value: str | None = None,
     reply_to: str | None = None,
+    doc_id: str | None = None,
 ) -> None:
     """
     Sends an email via Brevo SMTP.
@@ -81,6 +82,9 @@ def send_email_brevo_smtp(
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name, from_email))
     msg["To"] = to_email
+
+    if doc_id:
+        msg["X-Mailin-custom"] = f"doc_id:{doc_id}"
     if effective_reply_to:
         msg["Reply-To"] = effective_reply_to
 

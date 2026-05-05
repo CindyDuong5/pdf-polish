@@ -88,11 +88,23 @@ export type DocumentHistoryRow = {
   id: string;
   doc_type: string | null;
   status: string | null;
+
   invoice_number: string | null;
   quote_number: string | null;
   job_report_number: string | null;
+
   final_s3_key?: string | null;
   final_url?: string | null;
+
+  sent_to?: string | null;
+  sent_cc?: string | null;
+  sent_bcc?: string | null;
+  sent_at?: string | null;
+
+  email_status_at?: string | null;
+  email_status?: string | null;
+  email_status_label?: string | null;
+
   created_at?: string | null;
   updated_at?: string | null;
 };
