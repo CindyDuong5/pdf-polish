@@ -16,6 +16,20 @@ function isQuoteDoc(row: DocRow) {
   return (row.doc_type || "").toUpperCase().includes("QUOTE");
 }
 
+function isMainPageDoc(row: DocRow) {
+  const type = (row.doc_type || "").toUpperCase();
+
+  return (
+    type.includes("INVOICE") ||
+    type.includes("SERVICE_QUOTE") ||
+    type.includes("PROJECT_QUOTE")
+  );
+}
+
+function isServiceQuoteDoc(row: DocRow) {
+  return (row.doc_type || "").toUpperCase().includes("SERVICE_QUOTE");
+}
+
 function docTime(row: DocRow) {
   return new Date(row.updated_at || row.created_at || 0).getTime();
 }
@@ -75,7 +89,7 @@ export default function MainApp() {
     });
 
     const rawItems = (data.items || []) as DocRow[];
-    const nextItems = dedupeDocuments(rawItems);
+    const nextItems = dedupeDocuments(rawItems).filter(isMainPageDoc);
     setItems(nextItems);
 
     const wantedId = preferredSelectedId ?? selectedId;
@@ -347,13 +361,13 @@ export default function MainApp() {
               </div>
 
               <div className="row gap8">
-                {isQuoteDoc(selected) ? (
+                {isServiceQuoteDoc(selected) ? (
                   <button
                     className="btn btnPrimary"
                     disabled={loading || !selectedId}
                     onClick={onRestyle}
                   >
-                    {loading ? "Working..." : "Restyle Quote"}
+                    {loading ? "Working..." : "Restyle Service Quote"}
                   </button>
                 ) : null}
               </div>

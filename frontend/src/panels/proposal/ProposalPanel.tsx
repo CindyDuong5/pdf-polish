@@ -12,23 +12,52 @@ import {
 import ProposalStaticForm from "../../components/ProposalStaticForm";
 import PreviewCard from "../../components/PreviewCard";
 import AdditionalDocumentsPanel from "../../components/AdditionalDocumentsPanel";
-import type { ProposalContact, ProposalStaticFields } from "../../types";
-
-type Links = {
-  id?: string;
-  doc_type?: string;
-  filename?: string;
-  original?: { key: string | null; url: string | null };
-  styled_draft?: { key: string | null; url: string | null };
-  final?: { key: string | null; url: string | null };
-};
+import type {
+  DocRow,
+  Links,
+  ProposalContact,
+  ProposalStaticFields,
+} from "../../types";
 
 type Props = {
-  fields: ProposalStaticFields;
-  onChange: (patch: Partial<ProposalStaticFields>) => void;
+  fields?: ProposalStaticFields;
+  onChange?: (patch: Partial<ProposalStaticFields>) => void;
   proposalContacts?: ProposalContact[];
   onClear?: () => void;
+
+  selected?: DocRow;
+  selectedId?: string;
+  links?: Links | null;
+  reloadKey?: number;
+  loading?: boolean;
+  onLinksUpdated?: (links: Links) => void;
+  onResolvedDocId?: (docId: string) => void;
 };
+
+function emptyProposalFields(): ProposalStaticFields {
+  return {
+    proposal_number: "",
+    proposal_date: "",
+    proposal_type: "",
+    customer_id: "",
+    customer_name: "",
+    customer_address: "",
+    property_id: "",
+    property_name: "",
+    property_address: "",
+    contact_name: "",
+    contact_email: "",
+    contact_phone: "",
+    prepared_by: "",
+    scope_summary: "",
+    exclusions: "",
+    subtotal: "",
+    tax_rate: "13",
+    tax: "",
+    total: "",
+    items: [],
+  };
+}
 
 function parseMoney(value: string | number | null | undefined): number | null {
   if (value == null) return null;
@@ -73,7 +102,7 @@ function pickProposalFields(input: any): Partial<ProposalStaticFields> {
     exclusions: String(input.exclusions ?? ""),
 
     subtotal: String(input.subtotal ?? ""),
-    tax_rate: String(input.tax_rate ?? ""),
+    tax_rate: String(input.tax_rate ?? "13"),
     tax: String(input.tax ?? ""),
     total: String(input.total ?? ""),
 
@@ -156,14 +185,38 @@ function contactEmail(contact: any): string {
 }
 
 export default function ProposalPanel({
-  fields,
-  onChange,
+  fields: externalFields,
+  onChange: externalOnChange,
   proposalContacts = [],
   onClear,
+
+  selectedId,
+  links: externalLinks,
+  reloadKey: externalReloadKey,
+  onLinksUpdated,
+  onResolvedDocId,
 }: Props) {
-  const [docId, setDocId] = useState("");
-  const [links, setLinks] = useState<Links | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
+  const isExistingProposal = Boolean(selectedId);
+
+  const [internalFields, setInternalFields] =
+    useState<ProposalStaticFields>(emptyProposalFields);
+
+  const fields = externalFields || internalFields;
+
+  function onChange(patch: Partial<ProposalStaticFields>) {
+    if (externalOnChange) {
+      externalOnChange(patch);
+    } else {
+      setInternalFields((prev) => ({ ...prev, ...patch }));
+    }
+  }
+
+  const [docId, setDocId] = useState(selectedId || "");
+  const [internalLinks, setInternalLinks] = useState<Links | null>(null);
+  const [internalReloadKey, setInternalReloadKey] = useState(0);
+
+  const links = externalLinks ?? internalLinks;
+  const reloadKey = externalReloadKey ?? internalReloadKey;
 
   const [building, setBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -203,6 +256,57 @@ export default function ProposalPanel({
   }, [proposalContacts, toEmail]);
 
   useEffect(() => {
+    if (selectedId) return;
+
+    setDocId("");
+    setInternalLinks(null);
+    setInternalReloadKey((n) => n + 1);
+    setMsg(null);
+    setErr(null);
+    setSendMsg(null);
+    setSendErr(null);
+    setSubjectDirty(false);
+    setCcDirty(false);
+  }, [selectedId]);
+  
+  useEffect(() => {
+    if (!selectedId) return;
+
+    setDocId(selectedId);
+    setMsg(null);
+    setErr(null);
+    setSendMsg(null);
+    setSendErr(null);
+    setSubjectDirty(false);
+    setCcDirty(false);
+
+    async function loadExistingProposal() {
+      try {
+        const f = await getFields(selectedId!);
+        const next = f?.final || f?.draft || null;
+
+        if (next) {
+          onChange(pickProposalFields(next));
+        }
+
+        const nextLinks = await getLinks(selectedId!);
+
+        if (onLinksUpdated) {
+          onLinksUpdated(nextLinks);
+        } else {
+          setInternalLinks(nextLinks);
+          setInternalReloadKey((n) => n + 1);
+        }
+      } catch (e: any) {
+        setErr(friendlyErrorMessage(e));
+      }
+    }
+
+    loadExistingProposal().catch((e) => setErr(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  useEffect(() => {
     if (ccDirty) return;
     setCcInput(ccEmailsFromContacts.join(", "));
   }, [ccEmailsFromContacts, ccDirty]);
@@ -236,14 +340,19 @@ export default function ProposalPanel({
 
   async function refreshLinks(nextDocId: string) {
     const res = await getLinks(nextDocId);
-    setLinks(res);
-    setReloadKey((n) => n + 1);
+
+    if (onLinksUpdated) {
+      onLinksUpdated(res);
+    } else {
+      setInternalLinks(res);
+      setInternalReloadKey((n) => n + 1);
+    }
   }
 
   function handleClear() {
     setDocId("");
-    setLinks(null);
-    setReloadKey((n) => n + 1);
+    setInternalLinks(null);
+    setInternalReloadKey((n) => n + 1);
 
     setMsg(null);
     setErr(null);
@@ -277,6 +386,7 @@ export default function ProposalPanel({
       }
 
       setDocId(nextDocId);
+      onResolvedDocId?.(nextDocId);
 
       if (res?.fields) {
         onChange(pickProposalFields(res.fields));
@@ -378,28 +488,34 @@ export default function ProposalPanel({
       {err ? <div className="alert err">{err}</div> : null}
 
       <div className="panelCard">
-        <div className="sectionTitle">Proposal Builder</div>
+        <div className="sectionTitle">
+          {isExistingProposal ? "Editable Fields (Proposal)" : "Proposal Builder"}
+        </div>
 
         <ProposalStaticForm fields={fields} onChange={onChange} />
 
         <div className="row gap8" style={{ marginTop: 16 }}>
-          <button
-            className="btn btnPrimary"
-            type="button"
-            onClick={onBuildProposal}
-            disabled={building || saving || sending}
-          >
-            {building ? "Building..." : "Build Proposal"}
-          </button>
+          {!isExistingProposal ? (
+            <>
+              <button
+                className="btn btnPrimary"
+                type="button"
+                onClick={onBuildProposal}
+                disabled={building || saving || sending}
+              >
+                {building ? "Building..." : "Build Proposal"}
+              </button>
 
-          <button
-            className="btn"
-            type="button"
-            onClick={handleClear}
-            disabled={building || saving || sending}
-          >
-            Clear
-          </button>
+              <button
+                className="btn"
+                type="button"
+                onClick={handleClear}
+                disabled={building || saving || sending}
+              >
+                Clear
+              </button>
+            </>
+          ) : null}
 
           <button
             className="btn btnGhost"
@@ -484,7 +600,7 @@ export default function ProposalPanel({
               docId={docId}
               disabled={!docId || building || saving || sending}
               title="Additional Documents"
-              helpText="These files will be attached to the proposal email."
+              helpText="These files will be included as links in the proposal email."
             />
 
             <div className="row gap8" style={{ marginTop: 12 }}>

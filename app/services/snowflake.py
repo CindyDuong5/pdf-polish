@@ -22,6 +22,7 @@ BILLING_ROLE_KEYWORDS = (
     "account",
     "accounting",
     "accountant",
+    "all",
 )
 
 PROPERTY_FALLBACK_MESSAGE = (

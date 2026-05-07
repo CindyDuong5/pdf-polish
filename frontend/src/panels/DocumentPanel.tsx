@@ -2,6 +2,7 @@
 import type { DocRow, Links } from "../types";
 import ServiceQuotePanel from "./serviceQuote/ServiceQuotePanel";
 import InvoicePanel from "./invoice/InvoicePanel";
+import ProposalPanel from "./proposal/ProposalPanel";
 
 export default function DocumentPanel(props: {
   selected: DocRow;
@@ -15,11 +16,21 @@ export default function DocumentPanel(props: {
 }) {
   const type = (props.selected.doc_type || "").toUpperCase();
 
-  if (
-    type.includes("SERVICE_QUOTE") ||
-    type.includes("PROJECT_QUOTE") ||
-    type.includes("QUOTE")
-  ) {
+  if (type.includes("PROJECT_QUOTE")) {
+    return (
+      <ProposalPanel
+        selected={props.selected}
+        selectedId={props.selectedId}
+        links={props.links}
+        reloadKey={props.reloadKey}
+        loading={props.loading}
+        onLinksUpdated={props.onLinksUpdated}
+        onResolvedDocId={props.onResolvedDocId}
+      />
+    );
+  }
+
+  if (type.includes("SERVICE_QUOTE") || type.includes("QUOTE")) {
     return (
       <ServiceQuotePanel
         selected={props.selected}
@@ -51,7 +62,8 @@ export default function DocumentPanel(props: {
     <div className="card" style={{ padding: 12 }}>
       <div style={{ fontWeight: 900, marginBottom: 6 }}>Not supported yet</div>
       <div className="mutedSmall">
-        Editor not enabled for this document type yet: <b>{props.selected.doc_type || "UNKNOWN"}</b>
+        Editor not enabled for this document type yet:{" "}
+        <b>{props.selected.doc_type || "UNKNOWN"}</b>
       </div>
     </div>
   );

@@ -1,22 +1,65 @@
 // frontend/src/pages/ProposalPage.tsx
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getProposalOpportunity, friendlyErrorMessage } from "../api";
+import {
+  getProposalOpportunity,
+  friendlyErrorMessage,
+  getLinks,
+  listDocuments,
+  restyleDoc,
+} from "../api";
 import ProposalPanel from "../panels/proposal/ProposalPanel";
+import DocumentPanel from "../panels/DocumentPanel";
 import type {
+  DocRow,
+  Links,
   ProposalContact,
   ProposalStaticFields,
   ProposalItem,
 } from "../types";
+import {
+  getDisplayDocType,
+  getDisplayStatus,
+  getStatusClass,
+  getDocTypeClass,
+} from "../uiLabels";
 import "../styles.css";
 
 function todayIsoDate(): string {
   const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function isProjectQuoteDoc(row: DocRow) {
+  return (row.doc_type || "").toUpperCase().includes("PROJECT_QUOTE");
+}
+
+function docTime(row: DocRow) {
+  return new Date(row.updated_at || row.created_at || 0).getTime();
+}
+
+function dedupeProposalDocuments(rows: DocRow[]): DocRow[] {
+  const map = new Map<string, DocRow>();
+
+  for (const row of rows) {
+    const status = (row.status || "").toUpperCase();
+    const quoteNumber = String(row.quote_number || "").trim();
+
+    if (status === "REPLACED") continue;
+    if (!isProjectQuoteDoc(row)) continue;
+
+    const key = quoteNumber ? `proposal:${quoteNumber}` : `doc:${row.id}`;
+    const existing = map.get(key);
+
+    if (!existing || docTime(row) > docTime(existing)) {
+      map.set(key, row);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => docTime(b) - docTime(a));
 }
 
 const DEFAULT_SCOPE_SUMMARY = `Complete the Following Fire & Life Safety Inspections and Testing in Accordance with OFC, OBC, CAN/ULC-S536, NFPA 25, NFPA 10, CSA B64.`;
@@ -76,10 +119,6 @@ const DEFAULT_ITEMS_BY_TYPE: Record<string, ProposalItem[]> = {
       price: "TBD",
     },
   ],
-
-  // Later you can add:
-  // Service: [...],
-  // Project: [...],
 };
 
 function isEmptyItem(row: ProposalItem): boolean {
@@ -108,9 +147,7 @@ function getDefaultItemsForType(proposalType: string): ProposalItem[] | null {
 
 function parseMoney(value: string | number | null | undefined): number | null {
   if (value == null) return null;
-  const raw = String(value).trim();
-  if (!raw) return null;
-  const cleaned = raw.replace(/[^0-9.\-]/g, "");
+  const cleaned = String(value).trim().replace(/[^0-9.\-]/g, "");
   if (!cleaned) return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
@@ -160,35 +197,23 @@ function buildInitialFields(): ProposalStaticFields {
     proposal_number: "",
     proposal_date: todayIsoDate(),
     proposal_type: "",
-
     customer_id: "",
     customer_name: "",
     customer_address: "",
-
     property_id: "",
     property_name: "",
     property_address: "",
-
     contact_name: "",
     contact_email: "",
     contact_phone: "",
-
     prepared_by: "",
     scope_summary: DEFAULT_SCOPE_SUMMARY,
     exclusions: DEFAULT_EXCLUSIONS,
-
     subtotal: "",
     tax_rate: "13",
     tax: "",
     total: "",
-
-    items: [
-      {
-        item: "",
-        description: "",
-        price: "",
-      },
-    ],
+    items: [{ item: "", description: "", price: "" }],
   });
 }
 
@@ -212,7 +237,6 @@ function dedupeContacts(contacts: ProposalContact[]): ProposalContact[] {
     const key = email || name;
 
     if (!key || seen.has(key)) continue;
-
     seen.add(key);
     result.push(contact);
   }
@@ -222,9 +246,7 @@ function dedupeContacts(contacts: ProposalContact[]): ProposalContact[] {
 
 function getAllProposalContacts(item: any): ProposalContact[] {
   return dedupeContacts([
-    ...(Array.isArray(item.proposal_send_contacts)
-      ? item.proposal_send_contacts
-      : []),
+    ...(Array.isArray(item.proposal_send_contacts) ? item.proposal_send_contacts : []),
     ...(Array.isArray(item.property_quote_representatives)
       ? item.property_quote_representatives
       : []),
@@ -233,6 +255,7 @@ function getAllProposalContacts(item: any): ProposalContact[] {
       : []),
   ]);
 }
+
 
 export default function ProposalPage() {
   const navigate = useNavigate();
@@ -245,6 +268,117 @@ export default function ProposalPage() {
   const [lookupNotices, setLookupNotices] = useState<string[]>([]);
   const [proposalContacts, setProposalContacts] = useState<ProposalContact[]>([]);
 
+  const [proposalDocs, setProposalDocs] = useState<DocRow[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [links, setLinks] = useState<Links | null>(null);
+  const [reloadKey, setReloadKey] = useState<number>(() => Date.now());
+
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const selected = useMemo(
+    () => proposalDocs.find((x) => x.id === selectedId) || null,
+    [proposalDocs, selectedId]
+  );
+
+  const selectedLabel =
+    selected?.quote_number ||
+    selected?.invoice_number ||
+    selected?.job_report_number ||
+    (selected?.id ? selected.id.slice(0, 8) : "");
+
+  function startNewProposal() {
+    setSelectedId(null);
+    setLinks(null);
+    setReloadKey(Date.now());
+    setMsg(null);
+    setErr(null);
+
+    setFields(buildInitialFields());
+    setOpportunityNumber("");
+    setLookupMsg(null);
+    setLookupErr(null);
+    setLookupNotices([]);
+    setProposalContacts([]);
+  }
+  
+  async function refreshProposalDocs(preferredSelectedId?: string | null): Promise<DocRow[]> {
+    const data = await listDocuments({ limit: 50 });
+    const rows = dedupeProposalDocuments((data.items || []) as DocRow[]);
+    setProposalDocs(rows);
+
+    const wantedId = preferredSelectedId ?? selectedId;
+
+    if (wantedId && rows.some((x) => x.id === wantedId)) {
+      setSelectedId(wantedId);
+    } else if (wantedId && !rows.some((x) => x.id === wantedId)) {
+      setSelectedId(null);
+    }
+
+    return rows;
+  }
+
+  async function refreshLinks(id: string) {
+    const data = await getLinks(id);
+
+    setLinks((prev) => {
+      const changed =
+        prev?.original?.url !== data?.original?.url ||
+        prev?.styled_draft?.url !== data?.styled_draft?.url ||
+        prev?.final?.url !== data?.final?.url;
+
+      if (changed) setReloadKey(Date.now());
+      return data;
+    });
+  }
+
+  async function resolveSelectedDocId(newDocId: string) {
+    if (!newDocId) return;
+    setSelectedId(newDocId);
+    await refreshProposalDocs(newDocId);
+    await refreshLinks(newDocId);
+  }
+
+  async function onRestyle() {
+    if (!selectedId || !selected) return;
+
+    setLoading(true);
+    setMsg(null);
+    setErr(null);
+
+    try {
+      const result = await restyleDoc(selectedId);
+      const resolvedDocId = result?.doc_id || selectedId;
+
+      await refreshProposalDocs(resolvedDocId);
+      await refreshLinks(resolvedDocId);
+
+      if (resolvedDocId !== selectedId) setSelectedId(resolvedDocId);
+
+      setMsg("Restyle complete ✅ Draft + fields ready.");
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshProposalDocs().catch((e) => setErr(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setLinks(null);
+      return;
+    }
+
+    refreshLinks(selectedId).catch((e) => setErr(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
   function patchFields(patch: Partial<ProposalStaticFields>) {
     setFields((prev) => {
       const next: ProposalStaticFields = { ...prev, ...patch };
@@ -255,9 +389,7 @@ export default function ProposalPage() {
         shouldApplyDefaultItems(prev.items)
       ) {
         const defaultItems = getDefaultItemsForType(patch.proposal_type);
-        if (defaultItems) {
-          next.items = defaultItems;
-        }
+        if (defaultItems) next.items = defaultItems;
       }
 
       return calculateDerivedFields(next);
@@ -290,23 +422,18 @@ export default function ProposalPage() {
 
       const res = await getProposalOpportunity(number);
       const item = res.item;
-
       const hasPropertyId = Boolean(String(item.property_id || "").trim());
 
       patchFields({
         proposal_number: item.proposal_number || number,
         proposal_date: todayIsoDate(),
-
         prepared_by: item.prepared_by || "",
-
         customer_id: item.customer_id || "",
         customer_name: item.customer_name || "",
         customer_address: item.customer_address || "",
-
         property_id: item.property_id || "",
         property_name: item.property_name || item.customer_name || "",
         property_address: item.property_address || item.customer_address || "",
-
         contact_name: item.contact_name || "",
         contact_email: item.contact_email || "",
         contact_phone: item.contact_phone || "",
@@ -321,7 +448,6 @@ export default function ProposalPage() {
       }
 
       const contacts = getAllProposalContacts(item);
-
       setProposalContacts(contacts);
 
       if (contacts.length === 0) {
@@ -376,21 +502,111 @@ export default function ProposalPage() {
           </div>
 
           <div className="mutedSmall">
-            Enter opportunity number, choose proposal type, complete items, then
-            generate PDF.
+            Enter opportunity number, choose proposal type, complete items, then generate PDF.
           </div>
+
+          <div className="sidebarListHeader" style={{ marginTop: 18 }}>
+            <div className="sidebarSectionTitle">Recent Proposals</div>
+            <button className="btn btnPrimary" type="button" onClick={startNewProposal}>
+              + New Proposal
+            </button>
+            <div className="mutedSmall">{proposalDocs.length} proposals</div>
+          </div>
+        </div>
+
+        <div className="docList">
+          {proposalDocs.map((d) => {
+            const label = d.quote_number || d.id.slice(0, 8);
+            const isActive = d.id === selectedId;
+            const displayStatus = getDisplayStatus(d);
+            const statusClass = getStatusClass(displayStatus);
+            const docTypeClass = getDocTypeClass(d);
+
+            return (
+              <button
+                key={d.id}
+                className={`docCard ${docTypeClass} ${isActive ? "active" : ""}`}
+                onClick={() => setSelectedId(d.id)}
+              >
+                <div className="docCardTop">
+                  <span className={`pill ${getDisplayDocType(d).replace(/\s+/g, "")}`}>
+                    {getDisplayDocType(d)}
+                  </span>
+                  <span className="docLabel">{label}</span>
+                </div>
+
+                <div className={`docMeta statusRow ${statusClass}`}>
+                  <span className={`statusDot ${statusClass}`} />
+                  <span className="statusText">Status: {displayStatus}</span>
+                </div>
+
+                <div className="docMeta muted docSummary">
+                  {d.customer_name || d.property_address || ""}
+                </div>
+
+                {d.error ? <div className="docError">{d.error}</div> : null}
+              </button>
+            );
+          })}
         </div>
       </aside>
 
       <main className="main">
         <div className="topBar">
           <div>
-            <div className="pageTitle">Create Proposal</div>
+            <div className="pageTitle">Proposal Builder</div>
             <div className="pageSub">
-              Load proposal data from BuildOps opportunity number
+              Select a previous proposal on the left, or create a new one below.
             </div>
           </div>
         </div>
+
+        {selected ? (
+          <div style={{ marginBottom: 16 }}>
+            <div className="topBar">
+              <div>
+                <div className="pageTitle">
+                  {getDisplayDocType(selected)} <span className="muted">—</span>{" "}
+                  {selectedLabel}
+                </div>
+                <div className="pageSub">
+                  Status: <b>{getDisplayStatus(selected)}</b>
+                  {!selected.styled_draft_s3_key ? (
+                    <span className="warnBadge">Draft generating…</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="row gap8">
+                <button
+                  className="btn btnPrimary"
+                  disabled={loading || !selectedId}
+                  onClick={onRestyle}
+                >
+                  {loading ? "Working..." : "Restyle Proposal"}
+                </button>
+              </div>
+            </div>
+
+            {msg ? <div className="alert ok">{msg}</div> : null}
+            {err ? <div className="alert err">{err}</div> : null}
+
+            <DocumentPanel
+              selected={selected}
+              selectedId={selectedId!}
+              links={links}
+              reloadKey={reloadKey}
+              onRestyle={onRestyle}
+              loading={loading}
+              onLinksUpdated={(l) => setLinks(l)}
+              onResolvedDocId={resolveSelectedDocId}
+            />
+          </div>
+        ) : (
+          <div className="emptyState" style={{ marginBottom: 16 }}>
+            Select a proposal from the left to preview/edit it.
+          </div>
+        )}
 
         <div className="panelCard" style={{ marginBottom: 16 }}>
           <div className="sectionTitle">Load Opportunity</div>
@@ -400,7 +616,11 @@ export default function ProposalPage() {
               className="input"
               placeholder="Enter opportunity number..."
               value={opportunityNumber}
-              onChange={(e) => setOpportunityNumber(e.target.value)}
+              onFocus={startNewProposal}
+              onChange={(e) => {
+                startNewProposal();
+                setOpportunityNumber(e.target.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") onLoadOpportunity();
               }}
@@ -446,12 +666,10 @@ export default function ProposalPage() {
             <div className="proposalContactBox">
               <div className="proposalContactHeader">
                 <div>
-                  <div className="proposalContactTitle">
-                    Select Proposal Contact
-                  </div>
+                  <div className="proposalContactTitle">Select Proposal Contact</div>
                   <div className="proposalContactSub">
-                    Selected contact is used for the proposal. Other contacts
-                    are added to CC.
+                    Selected contact is used for the proposal. Other contacts are added
+                    to CC.
                   </div>
                 </div>
               </div>
@@ -459,7 +677,7 @@ export default function ProposalPage() {
               <div className="proposalContactList">
                 {proposalContacts.map((contact, index) => {
                   const email = contactEmail(contact);
-                  const selected =
+                  const selectedContact =
                     email &&
                     email.toLowerCase() === fields.contact_email.toLowerCase();
 
@@ -468,7 +686,7 @@ export default function ProposalPage() {
                       key={`${email || contact.full_name || "contact"}-${index}`}
                       type="button"
                       className={`proposalContactOption ${
-                        selected ? "selected" : ""
+                        selectedContact ? "selected" : ""
                       }`}
                       onClick={() => applySelectedContact(contact)}
                     >
@@ -476,10 +694,8 @@ export default function ProposalPage() {
                         <div className="proposalContactName">
                           {contact.full_name || "Unnamed Contact"}
                         </div>
-                        {selected ? (
-                          <span className="proposalSelectedBadge">
-                            Selected
-                          </span>
+                        {selectedContact ? (
+                          <span className="proposalSelectedBadge">Selected</span>
                         ) : null}
                       </div>
 
