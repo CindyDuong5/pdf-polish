@@ -304,7 +304,10 @@ export default function ProposalPage() {
   }
   
   async function refreshProposalDocs(preferredSelectedId?: string | null): Promise<DocRow[]> {
-    const data = await listDocuments({ limit: 50 });
+    const data = await listDocuments({
+      doc_type: "PROJECT_QUOTE",
+      limit: 20,
+    });
     const rows = dedupeProposalDocuments((data.items || []) as DocRow[]);
     setProposalDocs(rows);
 
