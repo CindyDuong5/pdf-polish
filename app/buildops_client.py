@@ -112,6 +112,93 @@ class BuildOpsClient:
         inv_id = self.lookup_invoice_id(invoice_number)
         return self.get_invoice_by_id(inv_id)
 
+
+    # ---------------- Quotes ----------------
+    def get_quotes(
+        self,
+        *,
+        quote_number: str | int | None = None,
+        page: int = 0,
+        page_size: int = 10,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "page": page,
+            "page_size": page_size,
+        }
+
+        if quote_number:
+            params["quote_number"] = str(quote_number).strip()
+
+        return self.get("/quotes", params=params)
+
+    def get_quote_by_number(self, quote_number: str | int) -> Dict[str, Any] | None:
+        qn = str(quote_number or "").strip()
+        if not qn:
+            return None
+
+        data = self.get_quotes(
+            quote_number=qn,
+            page=0,
+            page_size=10,
+        )
+
+        items = data.get("items") or []
+
+        for item in items:
+            if str(item.get("quoteNumber") or "").strip() == qn:
+                return item
+
+        return items[0] if items else None
+
+    def get_quote_property_customer_ids(
+        self,
+        quote_number: str | int,
+    ) -> Dict[str, str]:
+        quote = self.get_quote_by_number(quote_number)
+
+        if not quote:
+            return {
+                "quote_id": "",
+                "property_id": "",
+                "customer_id": "",
+            }
+
+        property_id = str(
+            quote.get("propertyId")
+            or quote.get("property_id")
+            or quote.get("property", {}).get("id")
+            or ""
+        ).strip()
+
+        customer_id = str(
+            quote.get("billingCustomerId")
+            or quote.get("customerId")
+            or quote.get("customer_id")
+            or quote.get("billingCustomer", {}).get("id")
+            or quote.get("customer", {}).get("id")
+            or ""
+        ).strip()
+
+        # Fallback: quote has property_id but no customer_id.
+        # Get customer_id from property detail.
+        if property_id and not customer_id:
+            try:
+                prop = self.get_property_by_id(property_id)
+                customer_id = str(
+                    prop.get("customerId")
+                    or prop.get("customer_id")
+                    or prop.get("customer", {}).get("id")
+                    or ""
+                ).strip()
+            except Exception as e:
+                print("PROPERTY CUSTOMER LOOKUP FAILED:", e)
+
+        return {
+            "quote_id": str(quote.get("id") or "").strip(),
+            "property_id": property_id,
+            "customer_id": customer_id,
+        }
+    
     # ---------------- Properties ----------------
     def get_property_by_id(self, property_id: str) -> Dict[str, Any]:
         return self.get(f"/properties/{property_id}")

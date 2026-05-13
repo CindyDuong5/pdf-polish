@@ -21,8 +21,7 @@ function isMainPageDoc(row: DocRow) {
 
   return (
     type.includes("INVOICE") ||
-    type.includes("SERVICE_QUOTE") ||
-    type.includes("PROJECT_QUOTE")
+    type.includes("SERVICE_QUOTE")
   );
 }
 

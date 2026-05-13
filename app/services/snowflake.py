@@ -672,3 +672,125 @@ def resolve_invoice_recipient_suggestion(
         "property_result": property_result,
         "customer_result": customer_result,
     }
+
+
+def is_valid_service_quote_original_email(email: Optional[str]) -> bool:
+    cleaned = _clean_rep_email(email)
+    return bool(cleaned) and cleaned not in IGNORED_REP_EMAILS
+
+
+def get_quote_reps_for_service_quote(
+    *,
+    property_id: Optional[str],
+    customer_id: Optional[str],
+) -> Dict[str, Any]:
+    property_id = (property_id or "").strip()
+    customer_id = (customer_id or "").strip()
+
+    property_reps = _filter_quote_reps(get_property_representatives(property_id)) if property_id else []
+    customer_reps = _filter_quote_reps(get_customer_representatives(customer_id)) if customer_id else []
+
+    if property_reps:
+        return {
+            "source": "property",
+            "items": property_reps,
+            "property_items": property_reps,
+            "customer_items": customer_reps,
+            "message": "",
+        }
+
+    if customer_reps:
+        return {
+            "source": "customer",
+            "items": customer_reps,
+            "property_items": property_reps,
+            "customer_items": customer_reps,
+            "message": "No quote/proposal contact found under Property level. Using Customer level contact.",
+        }
+
+    return {
+        "source": "manual",
+        "items": [],
+        "property_items": property_reps,
+        "customer_items": customer_reps,
+        "message": "No quote/proposal contact found under Property or Customer level. Please manually enter the email address.",
+    }
+
+
+def resolve_service_quote_contacts(
+    *,
+    property_id: Optional[str],
+    customer_id: Optional[str],
+    original_name: Optional[str] = None,
+    original_email: Optional[str] = None,
+    original_phone: Optional[str] = None,
+) -> Dict[str, Any]:
+    original_email = (original_email or "").strip()
+    original_valid = is_valid_service_quote_original_email(original_email)
+
+    reps_result = get_quote_reps_for_service_quote(
+        property_id=property_id,
+        customer_id=customer_id,
+    )
+
+    reps = reps_result["items"]
+
+    rep_emails = _dedupe_emails([
+        _clean_rep_email(rep.get("email_address"))
+        for rep in reps
+        if _is_allowed_rep_email(rep.get("email_address"))
+    ])
+
+    # PDF contact:
+    # keep original contact if valid, otherwise use first quote/proposal/all rep.
+    pdf_contact = {
+        "contact_name": (original_name or "").strip(),
+        "contact_email": original_email if original_valid else "",
+        "contact_phone": (original_phone or "").strip(),
+    }
+
+    if not pdf_contact["contact_email"] and reps:
+        first = reps[0]
+        pdf_contact = {
+            "contact_name": str(first.get("full_name") or "").strip(),
+            "contact_email": str(first.get("email_address") or "").strip(),
+            "contact_phone": str(first.get("phone_mobile") or "").strip(),
+        }
+
+    # Email To / CC:
+    if original_valid:
+        to_email = _clean_rep_email(original_email)
+        cc_emails = [e for e in rep_emails if e != to_email]
+        source = "original_pdf"
+        message = (
+            "Using the valid contact from the original service quote. "
+            "Other quote/proposal contacts were added to CC."
+        )
+    elif rep_emails:
+        to_email = rep_emails[0]
+        cc_emails = rep_emails[1:]
+        source = reps_result["source"]
+        message = reps_result["message"]
+    else:
+        to_email = ""
+        cc_emails = []
+        source = "manual"
+        message = reps_result["message"]
+
+    return {
+        "source": source,
+        "message": message,
+        "to": to_email,
+        "cc": cc_emails,
+        "all_emails": _dedupe_emails(([to_email] if to_email else []) + cc_emails),
+        "items": reps,
+        "pdf_contact": pdf_contact,
+        "property_result": {
+            "property_id": property_id or "",
+            "items": reps_result["property_items"],
+        },
+        "customer_result": {
+            "customer_id": customer_id or "",
+            "items": reps_result["customer_items"],
+        },
+    }

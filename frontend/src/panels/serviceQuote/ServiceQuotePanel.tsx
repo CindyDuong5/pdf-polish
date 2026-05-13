@@ -3,7 +3,15 @@ import { useEffect, useState } from "react";
 import PreviewCard from "../../components/PreviewCard";
 import ServiceQuoteEditor from "../../components/ServiceQuoteEditor";
 import type { DocRow, Links, ServiceQuoteFields } from "../../types";
-import { sendEmail, saveFinal, getFields, getLinks, friendlyErrorMessage } from "../../api";
+import {
+  sendEmail,
+  saveFinal,
+  getFields,
+  getLinks,
+  friendlyErrorMessage,
+  getServiceQuoteContactSuggestion,
+} from "../../api";
+
 import AdditionalDocumentsPanel from "../../components/AdditionalDocumentsPanel";
 import { withComputedTotals } from "./totals";
 
@@ -26,10 +34,15 @@ export default function ServiceQuotePanel(props: {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  const [contactMsg, setContactMsg] = useState<string | null>(null);
+  const [contactSource, setContactSource] = useState<string | null>(null);
+  const [contactLoading, setContactLoading] = useState(false);
+
   const [sendMsg, setSendMsg] = useState<string | null>(null);
   const [sendErr, setSendErr] = useState<string | null>(null);
 
   const [finalRefreshKey, setFinalRefreshKey] = useState(0);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const originalUrl = props.links?.original?.url || null;
   const draftUrl = props.links?.styled_draft?.url || null;
@@ -80,6 +93,42 @@ export default function ServiceQuotePanel(props: {
         setFields(computed);
         setSubjectInput(buildDefaultQuoteSubject(computed));
         setSubjectDirty(false);
+        setHasUnsavedChanges(false);
+        try {
+          setContactLoading(true);
+
+          const suggestion = await getServiceQuoteContactSuggestion(props.selectedId);
+
+          if (!alive) return;
+
+          setContactSource(suggestion.source || null);
+          setContactMsg(suggestion.message || null);
+
+          const nextTo = String(suggestion.to || "").trim();
+          const nextCc = Array.isArray(suggestion.cc) ? suggestion.cc : [];
+
+          if (computed) {
+            const pdfContact = suggestion.pdf_contact || {};
+
+            const updatedFields = withComputedTotals({
+              ...computed,
+              client_name: pdfContact.contact_name || computed.client_name || "",
+              client_email: pdfContact.contact_email || nextTo || computed.client_email || "",
+              client_phone: pdfContact.contact_phone || computed.client_phone || "",
+            });
+
+            setFields(updatedFields);
+            setSubjectInput(buildDefaultQuoteSubject(updatedFields));
+            setHasUnsavedChanges(true);
+          }
+
+          setCcInput(nextCc.join(", "));
+        } catch (e: any) {
+          if (!alive) return;
+          setContactMsg("Could not auto-check quote contacts. Please review To/CC manually.");
+        } finally {
+          if (alive) setContactLoading(false);
+        }
       } catch (e: any) {
         if (!alive) return;
         setFields(null);
@@ -130,6 +179,7 @@ export default function ServiceQuotePanel(props: {
       const l = await getLinks(resolvedDocId);
       props.onLinksUpdated(l);
       setFinalRefreshKey((n) => n + 1);
+      setHasUnsavedChanges(false);
 
       setMsg(result?.reused_existing ? "Saved Final ✅ merged into latest quote row" : "Saved Final ✅");
     } catch (e: any) {
@@ -141,7 +191,7 @@ export default function ServiceQuotePanel(props: {
     if (!props.selectedId) return;
 
     if (!toEmail.trim()) {
-      setSendErr("Missing client email");
+      setSendErr("Missing email. Please enter the email in Client Email, then send again.");
       setSendMsg(null);
       return;
     }
@@ -204,7 +254,10 @@ export default function ServiceQuotePanel(props: {
           {fields ? (
             <ServiceQuoteEditor
               value={fields}
-              onChange={(v) => setFields(withComputedTotals(v))}
+              onChange={(v) => {
+                setFields(withComputedTotals(v));
+                setHasUnsavedChanges(true);
+              }}
               onSave={onSaveFinal}
               saving={props.loading}
               canSave={!props.loading && !!props.selectedId && !!fields}
@@ -227,8 +280,31 @@ export default function ServiceQuotePanel(props: {
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Send Email</div>
 
             <div className="mutedSmall" style={{ marginBottom: 10 }}>
-              To: <b>{toEmail || "(missing client_email)"}</b>
+              To: <b>{toEmail || "(missing email - please enter manually in Client Email)"}</b>
             </div>
+
+            {contactLoading ? (
+              <div className="alert ok" style={{ marginBottom: 10 }}>
+                Checking quote contacts...
+              </div>
+            ) : contactMsg ? (
+              <div className={contactSource === "manual" ? "alert err" : "alert ok"} style={{ marginBottom: 10 }}>
+                {contactMsg}
+              </div>
+            ) : contactSource ? (
+              <div className="alert ok" style={{ marginBottom: 10 }}>
+                Contact source:{" "}
+                <b>
+                  {contactSource === "original_pdf"
+                    ? "Original service quote"
+                    : contactSource === "property"
+                    ? "Property contact"
+                    : contactSource === "customer"
+                    ? "Customer contact"
+                    : "Manual"}
+                </b>
+              </div>
+            ) : null}
 
             <label style={{ display: "block", marginBottom: 10 }}>
               <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
@@ -273,14 +349,26 @@ export default function ServiceQuotePanel(props: {
               docId={props.selectedId}
               disabled={sending || props.loading || !props.selectedId}
               title="Additional Documents"
-              helpText="These files will be attached to the quote email."
+              helpText="These documents will be included as links in the quote email."
             />
+
+            {hasUnsavedChanges ? (
+              <div className="alert err" style={{ marginTop: 10, marginBottom: 10 }}>
+                Contact or quote details changed. Please click Save Final before sending, so the PDF matches the email.
+              </div>
+            ) : null}
 
             <div className="row gap8" style={{ marginTop: 12 }}>
               <button
                 className="btn btnPrimary"
                 onClick={onSendEmail}
-                disabled={sending || props.loading || !props.selectedId || !toEmail.trim()}
+                disabled={
+                  sending ||
+                  props.loading ||
+                  !props.selectedId ||
+                  !toEmail.trim() ||
+                  hasUnsavedChanges
+                }
               >
                 {sending ? "Sending..." : "📧 Send"}
               </button>

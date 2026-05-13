@@ -53,6 +53,28 @@ export type SaveFinalResponse = {
   reused_existing?: boolean;
 };
 
+export type ServiceQuoteContactSuggestion = {
+  source: string;
+  message?: string | null;
+  to: string;
+  cc: string[];
+  all_emails: string[];
+  items?: any[];
+  pdf_contact?: {
+    contact_name?: string;
+    contact_email?: string;
+    contact_phone?: string;
+  };
+  property_result?: any;
+  customer_result?: any;
+  quote_number?: string;
+  buildops_quote_id?: string;
+  property_id?: string;
+  customer_id?: string;
+  buildops_error?: string;
+};
+
+
 export type SendEmailPayload = {
   cc?: string[];
   bcc?: string[];
@@ -408,6 +430,12 @@ export async function saveFinal(
 }
 
 /* ---------------- Quote / proposal email ---------------- */
+
+export async function getServiceQuoteContactSuggestion(
+  docId: string
+): Promise<ServiceQuoteContactSuggestion> {
+  return httpJson(`${API_BASE}/api/documents/${docId}/service-quote-contact-suggestion`);
+}
 
 export async function sendEmail(
   docId: string,

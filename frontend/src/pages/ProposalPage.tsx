@@ -185,10 +185,8 @@ function calculateDerivedFields(next: ProposalStaticFields): ProposalStaticField
         ? money2(effectiveSubtotal)
         : "",
     tax_rate: String(taxRate),
-    tax:
-      hasAnyNumericItemPrice || manualSubtotal !== null ? money2(tax) : "",
-    total:
-      hasAnyNumericItemPrice || manualSubtotal !== null ? money2(total) : "",
+    tax: hasAnyNumericItemPrice || manualSubtotal !== null ? money2(tax) : "",
+    total: hasAnyNumericItemPrice || manualSubtotal !== null ? money2(total) : "",
   };
 }
 
@@ -237,6 +235,7 @@ function dedupeContacts(contacts: ProposalContact[]): ProposalContact[] {
     const key = email || name;
 
     if (!key || seen.has(key)) continue;
+
     seen.add(key);
     result.push(contact);
   }
@@ -255,7 +254,6 @@ function getAllProposalContacts(item: any): ProposalContact[] {
       : []),
   ]);
 }
-
 
 export default function ProposalPage() {
   const navigate = useNavigate();
@@ -302,12 +300,13 @@ export default function ProposalPage() {
     setLookupNotices([]);
     setProposalContacts([]);
   }
-  
+
   async function refreshProposalDocs(preferredSelectedId?: string | null): Promise<DocRow[]> {
     const data = await listDocuments({
       doc_type: "PROJECT_QUOTE",
       limit: 20,
     });
+
     const rows = dedupeProposalDocuments((data.items || []) as DocRow[]);
     setProposalDocs(rows);
 
@@ -338,6 +337,7 @@ export default function ProposalPage() {
 
   async function resolveSelectedDocId(newDocId: string) {
     if (!newDocId) return;
+
     setSelectedId(newDocId);
     await refreshProposalDocs(newDocId);
     await refreshLinks(newDocId);
@@ -504,16 +504,57 @@ export default function ProposalPage() {
             </button>
           </div>
 
-          <div className="mutedSmall">
-            Enter opportunity number, choose proposal type, complete items, then generate PDF.
-          </div>
+          <div style={{ marginTop: 20 }}>
+            <div className="sidebarSectionTitle" style={{ marginBottom: 8 }}>
+              Previous Proposals
+            </div>
 
-          <div className="sidebarListHeader" style={{ marginTop: 18 }}>
-            <div className="sidebarSectionTitle">Recent Proposals</div>
-            <button className="btn btnPrimary" type="button" onClick={startNewProposal}>
-              + New Proposal
+            <div
+              className="proposalNotice"
+              style={{
+                marginBottom: 12,
+                padding: "10px 12px",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 12,
+                fontSize: 13,
+                lineHeight: 1.4,
+                color: "#475569",
+              }}
+            >
+              Click a previous proposal to review, edit, or continue where you left off.
+            </div>
+
+            <button
+              className="btn btnPrimary"
+              type="button"
+              onClick={startNewProposal}
+              style={{
+                width: "100%",
+                padding: "14px 16px",
+                fontSize: 15,
+                fontWeight: 900,
+                borderRadius: 14,
+                boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
+                marginBottom: 10,
+              }}
+            >
+              + Start New Proposal
             </button>
-            <div className="mutedSmall">{proposalDocs.length} proposals</div>
+
+            <div
+              className="mutedSmall"
+              style={{
+                fontSize: 12,
+                lineHeight: 1.4,
+                marginBottom: 8,
+              }}
+            >
+              When reviewing a previous proposal, click <b>Start New Proposal</b> to clear
+              the screen and build a completely new proposal.
+            </div>
+
+            <div className="mutedSmall">{proposalDocs.length} previous proposals</div>
           </div>
         </div>
 
@@ -559,7 +600,10 @@ export default function ProposalPage() {
           <div>
             <div className="pageTitle">Proposal Builder</div>
             <div className="pageSub">
-              Select a previous proposal on the left, or create a new one below.
+              Choose a previous proposal to review/edit, or start a brand-new proposal from the left panel.
+            </div>
+            <div className="mutedSmall">
+              Enter opportunity number, choose proposal type, complete items, then generate PDF.
             </div>
           </div>
         </div>
@@ -572,6 +616,7 @@ export default function ProposalPage() {
                   {getDisplayDocType(selected)} <span className="muted">—</span>{" "}
                   {selectedLabel}
                 </div>
+
                 <div className="pageSub">
                   Status: <b>{getDisplayStatus(selected)}</b>
                   {!selected.styled_draft_s3_key ? (
@@ -606,140 +651,135 @@ export default function ProposalPage() {
             />
           </div>
         ) : (
-          <div className="emptyState" style={{ marginBottom: 16 }}>
-            Select a proposal from the left to preview/edit it.
-          </div>
-        )}
+          <>
+            <div className="panelCard" style={{ marginBottom: 16 }}>
+              <div className="sectionTitle">Load Opportunity</div>
 
-        <div className="panelCard" style={{ marginBottom: 16 }}>
-          <div className="sectionTitle">Load Opportunity</div>
+              <div className="row gap8">
+                <input
+                  className="input"
+                  placeholder="Enter opportunity number..."
+                  value={opportunityNumber}
+                  onChange={(e) => setOpportunityNumber(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onLoadOpportunity();
+                  }}
+                />
 
-          <div className="row gap8">
-            <input
-              className="input"
-              placeholder="Enter opportunity number..."
-              value={opportunityNumber}
-              onFocus={startNewProposal}
-              onChange={(e) => {
-                startNewProposal();
-                setOpportunityNumber(e.target.value);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onLoadOpportunity();
-              }}
-            />
-
-            <button
-              className="btn btnPrimary"
-              type="button"
-              onClick={onLoadOpportunity}
-              disabled={loadingOpportunity}
-            >
-              {loadingOpportunity ? "Loading..." : "Load"}
-            </button>
-          </div>
-
-          {lookupMsg ? (
-            <div className="proposalNotice success" style={{ marginTop: 10 }}>
-              <div className="proposalNoticeIcon">✅</div>
-              <div>
-                <div className="proposalNoticeTitle">Opportunity loaded</div>
-                <div className="proposalNoticeText">
-                  Proposal information has been filled from BuildOps.
-                </div>
+                <button
+                  className="btn btnPrimary"
+                  type="button"
+                  onClick={onLoadOpportunity}
+                  disabled={loadingOpportunity}
+                >
+                  {loadingOpportunity ? "Loading..." : "Load"}
+                </button>
               </div>
-            </div>
-          ) : null}
 
-          {lookupNotices.length > 0 ? (
-            <div className="proposalNotice warning" style={{ marginTop: 10 }}>
-              <div className="proposalNoticeIcon">ℹ️</div>
-              <div>
-                <div className="proposalNoticeTitle">Please review</div>
-                <div className="proposalNoticeText">
-                  {lookupNotices.map((notice, index) => (
-                    <div key={index}>{notice}</div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {proposalContacts.length > 1 ? (
-            <div className="proposalContactBox">
-              <div className="proposalContactHeader">
-                <div>
-                  <div className="proposalContactTitle">Select Proposal Contact</div>
-                  <div className="proposalContactSub">
-                    Selected contact is used for the proposal. Other contacts are added
-                    to CC.
+              {lookupMsg ? (
+                <div className="proposalNotice success" style={{ marginTop: 10 }}>
+                  <div className="proposalNoticeIcon">✅</div>
+                  <div>
+                    <div className="proposalNoticeTitle">Opportunity loaded</div>
+                    <div className="proposalNoticeText">
+                      Proposal information has been filled from BuildOps.
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
 
-              <div className="proposalContactList">
-                {proposalContacts.map((contact, index) => {
-                  const email = contactEmail(contact);
-                  const selectedContact =
-                    email &&
-                    email.toLowerCase() === fields.contact_email.toLowerCase();
+              {lookupNotices.length > 0 ? (
+                <div className="proposalNotice warning" style={{ marginTop: 10 }}>
+                  <div className="proposalNoticeIcon">ℹ️</div>
+                  <div>
+                    <div className="proposalNoticeTitle">Please review</div>
+                    <div className="proposalNoticeText">
+                      {lookupNotices.map((notice, index) => (
+                        <div key={index}>{notice}</div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
-                  return (
-                    <button
-                      key={`${email || contact.full_name || "contact"}-${index}`}
-                      type="button"
-                      className={`proposalContactOption ${
-                        selectedContact ? "selected" : ""
-                      }`}
-                      onClick={() => applySelectedContact(contact)}
-                    >
-                      <div className="proposalContactMain">
-                        <div className="proposalContactName">
-                          {contact.full_name || "Unnamed Contact"}
-                        </div>
-                        {selectedContact ? (
-                          <span className="proposalSelectedBadge">Selected</span>
-                        ) : null}
+              {proposalContacts.length > 1 ? (
+                <div className="proposalContactBox">
+                  <div className="proposalContactHeader">
+                    <div>
+                      <div className="proposalContactTitle">Select Proposal Contact</div>
+                      <div className="proposalContactSub">
+                        Selected contact is used for the proposal. Other contacts are
+                        added to CC.
                       </div>
+                    </div>
+                  </div>
 
-                      <div className="proposalContactMeta">
-                        <span>{email || "No email"}</span>
-                        {contact.role ? <span>• {contact.role}</span> : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                  <div className="proposalContactList">
+                    {proposalContacts.map((contact, index) => {
+                      const email = contactEmail(contact);
+                      const selectedContact =
+                        email &&
+                        email.toLowerCase() === fields.contact_email.toLowerCase();
+
+                      return (
+                        <button
+                          key={`${email || contact.full_name || "contact"}-${index}`}
+                          type="button"
+                          className={`proposalContactOption ${
+                            selectedContact ? "selected" : ""
+                          }`}
+                          onClick={() => applySelectedContact(contact)}
+                        >
+                          <div className="proposalContactMain">
+                            <div className="proposalContactName">
+                              {contact.full_name || "Unnamed Contact"}
+                            </div>
+
+                            {selectedContact ? (
+                              <span className="proposalSelectedBadge">Selected</span>
+                            ) : null}
+                          </div>
+
+                          <div className="proposalContactMeta">
+                            <span>{email || "No email"}</span>
+                            {contact.role ? <span>• {contact.role}</span> : null}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {lookupErr ? (
+                <div className="alert err" style={{ marginTop: 10 }}>
+                  {lookupErr}
+                </div>
+              ) : null}
             </div>
-          ) : null}
 
-          {lookupErr ? (
-            <div className="alert err" style={{ marginTop: 10 }}>
-              {lookupErr}
+            <ProposalPanel
+              fields={fields}
+              onChange={patchFields}
+              proposalContacts={proposalContacts}
+              onClear={onClearAll}
+            />
+
+            <div className="panelCard" style={{ marginTop: 16 }}>
+              <div className="sectionTitle">Current Payload Preview</div>
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  fontSize: 13,
+                }}
+              >
+                {JSON.stringify(fields, null, 2)}
+              </pre>
             </div>
-          ) : null}
-        </div>
-
-        <ProposalPanel
-          fields={fields}
-          onChange={patchFields}
-          proposalContacts={proposalContacts}
-          onClear={onClearAll}
-        />
-
-        <div className="panelCard" style={{ marginTop: 16 }}>
-          <div className="sectionTitle">Current Payload Preview</div>
-          <pre
-            style={{
-              margin: 0,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              fontSize: 13,
-            }}
-          >
-            {JSON.stringify(fields, null, 2)}
-          </pre>
-        </div>
+          </>
+        )}
       </main>
     </div>
   );

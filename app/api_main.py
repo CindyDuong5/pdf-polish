@@ -40,6 +40,9 @@ from app.api_proposal import router as proposal_router
 from app.api_brevo_webhook import router as brevo_webhook_router
 from app.services.payment_link import get_invoice_payment_link
 
+from app.buildops_client import BuildOpsClient
+from app.services.snowflake import resolve_service_quote_contacts
+
 app = FastAPI(title="PDF Polish API")
 
 app.include_router(invoice_router)
@@ -1105,6 +1108,79 @@ def api_download_additional_document(doc_id: str, additional_doc_id: str):
         url = storage.generate_presigned_url(storage_key)
 
     return RedirectResponse(url)
+
+@app.get("/api/documents/{doc_id}/service-quote-contact-suggestion")
+def service_quote_contact_suggestion(doc_id: str):
+    with SessionLocal() as db:
+        docrow = db.execute(
+            text(
+                """
+                SELECT id, doc_type, status, customer_email, quote_number
+                FROM public.documents
+                WHERE id = :id
+                """
+            ),
+            {"id": doc_id},
+        ).mappings().first()
+
+        if not docrow:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        rowd = dict(docrow)
+        _block_replaced_document(rowd)
+
+        dt = str(rowd.get("doc_type") or "").upper()
+        if "SERVICE_QUOTE" not in dt and "QUOTE" not in dt:
+            raise HTTPException(status_code=409, detail="Not a service quote document")
+
+        fields_row = get_fields(db, doc_id)
+        fields = {}
+        if fields_row:
+            fields = fields_row.get("final_json") or fields_row.get("draft_json") or {}
+
+        quote_number = (
+            str(fields.get("quote_number") or "").strip()
+            or str(rowd.get("quote_number") or "").strip()
+        )
+
+        original_name = str(fields.get("client_name") or "").strip()
+        original_email = (
+            str(fields.get("client_email") or "").strip()
+            or str(rowd.get("customer_email") or "").strip()
+        )
+        original_phone = str(fields.get("client_phone") or "").strip()
+
+    property_id = ""
+    customer_id = ""
+    buildops_quote_id = ""
+    buildops_error = ""
+
+    if quote_number:
+        try:
+            ids = BuildOpsClient().get_quote_property_customer_ids(quote_number)
+            buildops_quote_id = ids.get("quote_id") or ""
+            property_id = ids.get("property_id") or ""
+            customer_id = ids.get("customer_id") or ""
+        except Exception as e:
+            buildops_error = str(e)
+
+    result = resolve_service_quote_contacts(
+        property_id=property_id,
+        customer_id=customer_id,
+        original_name=original_name,
+        original_email=original_email,
+        original_phone=original_phone,
+    )
+
+    return {
+        **result,
+        "quote_number": quote_number,
+        "buildops_quote_id": buildops_quote_id,
+        "property_id": property_id,
+        "customer_id": customer_id,
+        "buildops_error": buildops_error,
+    }
+
 
 @app.post("/api/documents/{doc_id}/send-email")
 def send_email_any(doc_id: str, body: SendEmailIn):
