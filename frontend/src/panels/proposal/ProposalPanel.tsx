@@ -49,6 +49,7 @@ function emptyProposalFields(): ProposalStaticFields {
     contact_email: "",
     contact_phone: "",
     prepared_by: "",
+    proposal_version: "Fancy",
     scope_summary: "",
     exclusions: "",
     subtotal: "",
@@ -84,6 +85,7 @@ function pickProposalFields(input: any): Partial<ProposalStaticFields> {
     proposal_number: String(input.proposal_number ?? ""),
     proposal_date: String(input.proposal_date ?? ""),
     proposal_type: String(input.proposal_type ?? ""),
+    proposal_version: String(input.proposal_version ?? "Fancy"),
 
     customer_id: String(input.customer_id ?? ""),
     customer_name: String(input.customer_name ?? ""),

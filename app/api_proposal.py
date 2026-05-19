@@ -34,6 +34,7 @@ class ProposalFieldsIn(BaseModel):
     proposal_number: str = ""
     proposal_date: str = ""
     proposal_type: str = ""
+    proposal_version: str = "Fancy"
 
     customer_id: str = ""
     customer_name: str = ""

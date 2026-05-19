@@ -42,11 +42,9 @@ def _merge_cover_with_overlay(cover_path: str, overlay_bytes: bytes):
 
 
 def build_proposal_pdf(fields: Dict[str, Any]) -> bytes:
+    proposal_version = str(fields.get("proposal_version") or "Fancy").strip().lower()
+
     cover_path = get_cover_template(str(fields.get("proposal_type", "")))
-    intro_path = get_intro_template(str(fields.get("prepared_by", "")))
-    process_path = get_process_template(str(fields.get("proposal_type", "")))
-    testimonials_path = get_testimonials_template()
-    closing_path = get_closing_template(str(fields.get("prepared_by", "")))
 
     writer = PdfWriter()
 
@@ -58,13 +56,36 @@ def build_proposal_pdf(fields: Dict[str, Any]) -> bytes:
     black_page_indexes: list[int] = []
     white_page_indexes: list[int] = []
 
-    # Page 2 - intro
-    _append_all_pages(writer, _read_pdf(intro_path))
+    # Simple version: cover + content pages only
+    if proposal_version == "simple":
+        content_start_index = len(writer.pages)
+        content_pdf_bytes = render_content_pages(fields, start_page_number=2)
+        content_page_count = _append_all_pages(writer, _read_pdf(content_pdf_bytes))
 
-    # Page 3 - process
+        black_page_indexes.extend(
+            range(content_start_index, content_start_index + content_page_count)
+        )
+
+        out = BytesIO()
+        writer.write(out)
+        merged_bytes = out.getvalue()
+
+        return add_page_numbers(
+            merged_bytes,
+            start_at=2,
+            black_page_indexes=black_page_indexes,
+            white_page_indexes=white_page_indexes,
+        )
+
+    # Fancy version: current full proposal
+    intro_path = get_intro_template(str(fields.get("prepared_by", "")))
+    process_path = get_process_template(str(fields.get("proposal_type", "")))
+    testimonials_path = get_testimonials_template()
+    closing_path = get_closing_template(str(fields.get("prepared_by", "")))
+
+    _append_all_pages(writer, _read_pdf(intro_path))
     _append_all_pages(writer, _read_pdf(process_path))
 
-    # Page 4..N - generated content pages
     content_start_index = len(writer.pages)
     content_pdf_bytes = render_content_pages(fields, start_page_number=4)
     content_page_count = _append_all_pages(writer, _read_pdf(content_pdf_bytes))
@@ -73,7 +94,6 @@ def build_proposal_pdf(fields: Dict[str, Any]) -> bytes:
         range(content_start_index, content_start_index + content_page_count)
     )
 
-    # Testimonial page(s)
     testimonial_start_index = len(writer.pages)
     testimonial_page_count = _append_all_pages(writer, _read_pdf(testimonials_path))
 
@@ -81,17 +101,16 @@ def build_proposal_pdf(fields: Dict[str, Any]) -> bytes:
         range(testimonial_start_index, testimonial_start_index + testimonial_page_count)
     )
 
-    # Closing page(s) - no page number overlay
     _append_all_pages(writer, _read_pdf(closing_path))
 
     out = BytesIO()
     writer.write(out)
     merged_bytes = out.getvalue()
 
-    final_bytes = add_page_numbers(
+    return add_page_numbers(
         merged_bytes,
         start_at=4,
         black_page_indexes=black_page_indexes,
         white_page_indexes=white_page_indexes,
     )
-    return final_bytes
+   

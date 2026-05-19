@@ -160,6 +160,7 @@ export type ProposalStaticFields = {
   proposal_number: string;
   proposal_date: string;
   proposal_type: string;
+  proposal_version: string;
 
   customer_id: string;
   customer_name: string;

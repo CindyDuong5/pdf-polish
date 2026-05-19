@@ -8,6 +8,7 @@ type Props = {
 
 const PREPARED_BY_OPTIONS = ["Aidan Quinn", "Nikola Janevski", "Rob Felstead", "Sarah Caley"];
 const PROPOSAL_TYPE_OPTIONS = ["Project", "Service", "Inspection"];
+const PROPOSAL_VERSION_OPTIONS = ["Fancy", "Simple"];
 
 function sectionCardStyle(): React.CSSProperties {
   return {
@@ -203,57 +204,91 @@ export default function ProposalStaticForm({ fields, onChange }: Props) {
 
       <div style={sectionCardStyle()}>
         <div style={sectionTitleStyle()}>Proposal Details</div>
-        <div className="proposalFormGrid">
-          <div>
-            <label className="label">Proposal Number</label>
-            <input
-              className="input"
-              placeholder="Enter proposal number"
-              value={fields.proposal_number}
-              onChange={(e) => onChange({ proposal_number: e.target.value })}
-            />
+
+        <div style={{ display: "grid", gap: 14 }}>
+          {/* Row 1 */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 14,
+            }}
+          >
+            <div>
+              <label className="label">Proposal Number</label>
+              <input
+                className="input"
+                placeholder="Enter proposal number"
+                value={fields.proposal_number}
+                onChange={(e) => onChange({ proposal_number: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label className="label">Proposal Date</label>
+              <input
+                type="date"
+                className="input"
+                value={fields.proposal_date}
+                onChange={(e) => onChange({ proposal_date: e.target.value })}
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="label">Proposal Date</label>
-            <input
-              type="date"
-              className="input"
-              value={fields.proposal_date}
-              onChange={(e) => onChange({ proposal_date: e.target.value })}
-            />
-          </div>
+          {/* Row 2 */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 14,
+            }}
+          >
+            <div>
+              <label className="label">Prepared By</label>
+              <select
+                className="input"
+                value={fields.prepared_by}
+                onChange={(e) => onChange({ prepared_by: e.target.value })}
+              >
+                <option value="">Select user...</option>
+                {PREPARED_BY_OPTIONS.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div>
-            <label className="label">Prepared By</label>
-            <select
-              className="input"
-              value={fields.prepared_by}
-              onChange={(e) => onChange({ prepared_by: e.target.value })}
-            >
-              <option value="">Select user...</option>
-              {PREPARED_BY_OPTIONS.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </div>
+            <div>
+              <label className="label">Proposal Version</label>
+              <select
+                className="input"
+                value={fields.proposal_version || "Fancy"}
+                onChange={(e) => onChange({ proposal_version: e.target.value })}
+              >
+                {PROPOSAL_VERSION_OPTIONS.map((version) => (
+                  <option key={version} value={version}>
+                    {version}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div>
-            <label className="label">Proposal Type</label>
-            <select
-              className="input"
-              value={fields.proposal_type}
-              onChange={(e) => onChange({ proposal_type: e.target.value })}
-            >
-              <option value="">Select type...</option>
-              {PROPOSAL_TYPE_OPTIONS.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
+            <div>
+              <label className="label">Proposal Type</label>
+              <select
+                className="input"
+                value={fields.proposal_type}
+                onChange={(e) => onChange({ proposal_type: e.target.value })}
+              >
+                <option value="">Select type...</option>
+                {PROPOSAL_TYPE_OPTIONS.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </div>

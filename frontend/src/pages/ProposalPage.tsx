@@ -205,6 +205,7 @@ function buildInitialFields(): ProposalStaticFields {
     contact_email: "",
     contact_phone: "",
     prepared_by: "",
+    proposal_version: "Fancy",
     scope_summary: DEFAULT_SCOPE_SUMMARY,
     exclusions: DEFAULT_EXCLUSIONS,
     subtotal: "",
