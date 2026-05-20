@@ -1474,14 +1474,25 @@ def _notify_support_approved(
     text_body = "\n".join(lines).strip() + "\n"
     html_body = text_body.replace("\n", "<br>")
 
+    # Proposal → Sarah + Aidan
+    if doc_word == "Proposal":
+        to_email = "aidan@mainlinefire.com"
+        cc_list = ["sarah@mainlinefire.com"]
+
+    # Service Quote / Quote → Sarah + Kristyn
+    else:
+        to_email = "kristyn@mainlinefire.com"
+        cc_list = ["sarah@mainlinefire.com"]
+
     send_email_brevo_smtp(
-        to_email="kristyn@mainlinefire.com",
+        to_email=to_email,
         subject=subject,
         html_body=html_body,
         text_body=text_body,
-        cc_emails=["sarah@mainlinefire.com"],
+        cc_emails=cc_list,
         attachments=[],
     )
+
 
 def _notify_support_rejected(
     doc_word: str,
@@ -1506,12 +1517,22 @@ def _notify_support_rejected(
     text_body = "\n".join(lines).strip() + "\n"
     html_body = text_body.replace("\n", "<br>")
 
+    # Proposal → Sarah + Aidan
+    if doc_word == "Proposal":
+        to_email = "aidan@mainlinefire.com"
+        cc_list = ["sarah@mainlinefire.com"]
+
+    # Service Quote / Quote → Sarah + Kristyn
+    else:
+        to_email = "kristyn@mainlinefire.com"
+        cc_list = ["sarah@mainlinefire.com"]
+
     send_email_brevo_smtp(
-        to_email="kristyn@mainlinefire.com",
+        to_email=to_email,
         subject=subject,
         html_body=html_body,
         text_body=text_body,
-        cc_emails=["sarah@mainlinefire.com"],
+        cc_emails=cc_list,
         attachments=[],
     )
 

@@ -67,6 +67,9 @@ const DEFAULT_SCOPE_SUMMARY = `Complete the Following Fire & Life Safety Inspect
 const DEFAULT_EXCLUSIONS = `- Job to be completed during regular hours 08:00-16:30 Monday to Friday
 - Pricing is subject to parts availability and all items being done concurrently`;
 
+const INSPECTION_EXTRA_EXCLUSION =
+  "The above pricing is for inspections only and any repairs or maintenance required will be at an additional cost. Mainline will not complete any additional repairs or maintenance without approval.";
+
 const DEFAULT_ITEMS_BY_TYPE: Record<string, ProposalItem[]> = {
   Inspection: [
     {
@@ -387,13 +390,26 @@ export default function ProposalPage() {
     setFields((prev) => {
       const next: ProposalStaticFields = { ...prev, ...patch };
 
-      if (
-        patch.proposal_type &&
-        patch.proposal_type !== prev.proposal_type &&
-        shouldApplyDefaultItems(prev.items)
-      ) {
-        const defaultItems = getDefaultItemsForType(patch.proposal_type);
-        if (defaultItems) next.items = defaultItems;
+      if (patch.proposal_type && patch.proposal_type !== prev.proposal_type) {
+
+        // Default items
+        if (shouldApplyDefaultItems(prev.items)) {
+          const defaultItems = getDefaultItemsForType(patch.proposal_type);
+          if (defaultItems) next.items = defaultItems;
+        }
+
+        // Default exclusions
+        if (
+          !prev.exclusions ||
+          prev.exclusions.trim() === DEFAULT_EXCLUSIONS.trim()
+        ) {
+          if (patch.proposal_type === "Inspection") {
+            next.exclusions =
+              `${DEFAULT_EXCLUSIONS}\n- ${INSPECTION_EXTRA_EXCLUSION}`;
+          } else {
+            next.exclusions = DEFAULT_EXCLUSIONS;
+          }
+        }
       }
 
       return calculateDerivedFields(next);
