@@ -738,13 +738,9 @@ def save_final_proposal(doc_id: str, body: dict = Body(...)):
                         SET status = 'REPLACED',
                             updated_at = now()
                         WHERE quote_number = :quote_number
-                          AND id <> :keep_id
-                          AND COALESCE(status, '') <> 'REPLACED'
-                          AND (
-                                doc_type = 'PROJECT_QUOTE'
-                                OR doc_type = 'SERVICE_QUOTE'
-                                OR doc_type ILIKE '%QUOTE%'
-                              )
+                        AND id <> :keep_id
+                        AND COALESCE(status, '') <> 'REPLACED'
+                        AND doc_type = 'PROJECT_QUOTE'
                         """
                     ),
                     {
@@ -938,28 +934,7 @@ def _is_reviewable_quote(doc_type: str) -> bool:
 
 def _is_proposal_doc(row: dict) -> bool:
     dt = (row.get("doc_type") or "").upper().replace(" ", "_")
-    if dt != "PROJECT_QUOTE":
-        return False
-
-    extracted = _as_dict_maybe(row.get("extracted_fields"))
-    overrides = _as_dict_maybe(row.get("user_overrides"))
-
-    doc_label = str(
-        overrides.get("doc_label")
-        or extracted.get("doc_label")
-        or ""
-    ).strip().upper()
-
-    proposal_number = str(
-        overrides.get("proposal_number")
-        or extracted.get("proposal_number")
-        or ""
-    ).strip()
-
-    quote_number = str(row.get("quote_number") or "").strip().upper()
-
-    return doc_label == "PROPOSAL" or bool(proposal_number) or quote_number.startswith("P-")
-
+    return dt == "PROJECT_QUOTE"
 
 def _doc_word_for_reviewable(row: dict) -> str:
     return "Proposal" if _is_proposal_doc(row) else "Quote"
@@ -1472,12 +1447,27 @@ class RejectIn(BaseModel):
     token: str
 
 
-def _notify_support_approved(doc_word: str, quote_number: str, po: str | None, note: str | None):
+def _notify_support_approved(
+    doc_word: str,
+    quote_number: str,
+    property_name: str | None,
+    company_name: str | None,
+    po: str | None,
+    note: str | None,
+):
     subject = f"{doc_word} #{quote_number} APPROVED"
 
     lines = [f"{doc_word} #{quote_number} has been APPROVED.", ""]
+
+    location = property_name or company_name
+    if location:
+        lines.append("Property / Customer:")
+        lines.append(location.replace("<br>", "\n"))
+        lines.append("")
+
     if po and po.strip():
         lines.append(f"PO Number: {po.strip()}")
+
     if note and note.strip():
         lines.append(f"Notes: {note.strip()}")
 
@@ -1493,11 +1483,23 @@ def _notify_support_approved(doc_word: str, quote_number: str, po: str | None, n
         attachments=[],
     )
 
-
-def _notify_support_rejected(doc_word: str, quote_number: str, reason: str | None):
+def _notify_support_rejected(
+    doc_word: str,
+    quote_number: str,
+    property_name: str | None,
+    company_name: str | None,
+    reason: str | None,
+):
     subject = f"{doc_word} #{quote_number} REJECTED"
 
     lines = [f"{doc_word} #{quote_number} has been REJECTED.", ""]
+
+    location = property_name or company_name
+    if location:
+        lines.append("Property / Customer:")
+        lines.append(location.replace("<br>", "\n"))
+        lines.append("")
+
     if reason and reason.strip():
         lines.append(f"Reason: {reason.strip()}")
 
@@ -1512,6 +1514,7 @@ def _notify_support_rejected(doc_word: str, quote_number: str, reason: str | Non
         cc_emails=["sarah@mainlinefire.com"],
         attachments=[],
     )
+
 
 @app.post("/api/documents/{doc_id}/accept")
 def accept_document(doc_id: str, body: AcceptIn):
@@ -1528,6 +1531,10 @@ def accept_document(doc_id: str, body: AcceptIn):
                   d.status,
                   d.doc_type,
                   d.quote_number,
+                  d.customer_name,
+                  d.property_address,
+                  d.extracted_fields,
+                  d.user_overrides,
                   f.final_json
                 FROM public.documents d
                 LEFT JOIN public.document_fields f
@@ -1547,7 +1554,7 @@ def accept_document(doc_id: str, body: AcceptIn):
         if not _is_reviewable_quote(rowd.get("doc_type") or ""):
             raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={rowd.get('doc_type')}")
 
-        quote_number, _, _ = _extract_quote_info(rowd)
+        quote_number, property_name, company_name = _extract_quote_info(rowd)
         quote_label = _display_quote_label(quote_number, doc_id)
         doc_word = _doc_word_for_reviewable(rowd)
 
@@ -1580,7 +1587,14 @@ def accept_document(doc_id: str, body: AcceptIn):
         )
         db.commit()
 
-    _notify_support_approved(doc_word, quote_label, body.quote_po_number, body.quote_note)
+    _notify_support_approved(
+        doc_word,
+        quote_label,
+        property_name,
+        company_name,
+        body.quote_po_number,
+        body.quote_note,
+    )
 
     if body.send_email:
         return send_email_any(doc_id, SendEmailIn(client_email=None, cc=body.cc))
@@ -1603,6 +1617,10 @@ def reject_document(doc_id: str, body: RejectIn):
                   d.status,
                   d.doc_type,
                   d.quote_number,
+                  d.customer_name,
+                  d.property_address,
+                  d.extracted_fields,
+                  d.user_overrides,
                   f.final_json
                 FROM public.documents d
                 LEFT JOIN public.document_fields f
@@ -1622,7 +1640,7 @@ def reject_document(doc_id: str, body: RejectIn):
         if not _is_reviewable_quote(rowd.get("doc_type") or ""):
             raise HTTPException(status_code=409, detail=f"Not reviewable for doc_type={rowd.get('doc_type')}")
 
-        quote_number, _, _ = _extract_quote_info(rowd)
+        quote_number, property_name, company_name = _extract_quote_info(rowd)
         quote_label = _display_quote_label(quote_number, doc_id)
         doc_word = _doc_word_for_reviewable(rowd)
 
@@ -1652,7 +1670,13 @@ def reject_document(doc_id: str, body: RejectIn):
         )
         db.commit()
 
-    _notify_support_rejected(doc_word, quote_label, body.reason)
+    _notify_support_rejected(
+        doc_word,
+        quote_label,
+        property_name,
+        company_name,
+        body.reason,
+    )
 
     return {"ok": True, "id": doc_id, "status": "REJECTED"}
 

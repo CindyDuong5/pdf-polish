@@ -24,7 +24,7 @@ def _get_service_quote_template_path() -> Path:
 
 def _pick_styler(doc_type: str) -> Tuple[Any, str]:
     dt = (doc_type or "").upper().strip()
-    if dt in {"SERVICE_QUOTE", "QUOTE", "SERVICE", "PROJECT_QUOTE"}:
+    if dt in {"SERVICE_QUOTE", "QUOTE", "SERVICE"}:
         tpl = _get_service_quote_template_path()
         return ServiceQuoteStyler(template_pdf=tpl), "service_quote"
     raise ValueError(f"No styler configured yet for doc_type={doc_type!r}")
@@ -48,19 +48,24 @@ def _mark_older_quote_rows_replaced(
                 updated_at = now(),
                 error = :err
             WHERE quote_number = :quote_number
-              AND upper(doc_type) LIKE '%QUOTE%'
               AND id <> :keep_id
               AND COALESCE(status, '') <> 'REPLACED'
+              AND (
+                    upper(doc_type) = 'SERVICE_QUOTE'
+                    OR (
+                        upper(doc_type) LIKE '%QUOTE%'
+                        AND upper(doc_type) <> 'PROJECT_QUOTE'
+                    )
+                  )
             """
         ),
         {
             "quote_number": quote_number,
             "keep_id": keep_id,
-            "err": f"Replaced by newer quote row {keep_id}",
+            "err": f"Replaced by newer service quote row {keep_id}",
         },
     )
     return int(result.rowcount or 0)
-
 
 def ensure_draft(db: Session, doc_id: str, *, force: bool = False) -> dict:
     row = db.execute(
